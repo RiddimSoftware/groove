@@ -14,21 +14,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Check package structure
+
+      - name: Syntax check
         run: |
-          node --input-type=module <<'EOF'
-          import { existsSync } from 'fs';
-          const required = [
-            'packages/issue-standards/SKILL.md',
-            'packages/issue-standards/bin/setup.mjs',
-            'packages/linear-agent-hooks/hooks/post-tool-use.mjs',
-            'packages/linear-agent-hooks/hooks/stop.mjs',
-            'packages/linear-agent-hooks/bin/setup.mjs',
-          ];
-          let ok = true;
-          for (const f of required) {
-            if (!existsSync(f)) { console.error(`Missing: ${f}`); ok = false; }
-          }
-          if (!ok) process.exit(1);
-          console.log('All required files present.');
-          EOF
+          node --check packages/linear-agent-hooks/hooks/post-tool-use.mjs
+          node --check packages/linear-agent-hooks/hooks/stop.mjs
+          node --check packages/linear-agent-hooks/lib/comment.mjs
+          node --check packages/linear-agent-hooks/lib/transcript.mjs
+          node --check packages/linear-agent-hooks/bin/setup.mjs
+          node --check packages/issue-standards/bin/setup.mjs
+
+      - name: Run tests
+        run: |
+          node --test \
+            packages/linear-agent-hooks/tests/post-tool-use.test.mjs \
+            packages/linear-agent-hooks/tests/stop.test.mjs \
+            packages/linear-agent-hooks/tests/comment.test.mjs \
+            packages/linear-agent-hooks/tests/transcript.test.mjs

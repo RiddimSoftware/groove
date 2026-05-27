@@ -21,9 +21,11 @@
  *   GROOVE_CONTEXT_TURNS    Number of preceding user turns to include (default: 1)
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { buildCommentBody } from '../lib/comment.mjs';
+import { findTranscript, extractPrecedingContext } from '../lib/transcript.mjs';
 
 // ---------------------------------------------------------------------------
 // Linear API
@@ -59,105 +61,6 @@ async function postLinearComment(issueId, body, apiKey) {
 }
 
 // ---------------------------------------------------------------------------
-// Transcript lookup (best-effort)
-// ---------------------------------------------------------------------------
-
-/**
- * Find the Claude Code transcript file for a given session ID.
- * Claude stores transcripts at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
- * We search across all project dirs rather than reconstructing the encoding.
- */
-function findTranscript(sessionId) {
-  const projectsDir = join(homedir(), '.claude', 'projects');
-  if (!existsSync(projectsDir)) return null;
-
-  try {
-    const dirs = readdirSync(projectsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-
-    for (const dir of dirs) {
-      const candidate = join(projectsDir, dir, `${sessionId}.jsonl`);
-      if (existsSync(candidate)) return candidate;
-    }
-  } catch {
-    // best-effort
-  }
-
-  // Codex: ~/.codex/sessions/<session-id>.jsonl
-  const codexPath = join(homedir(), '.codex', 'sessions', `${sessionId}.jsonl`);
-  if (existsSync(codexPath)) return codexPath;
-
-  const codexArchived = join(homedir(), '.codex', 'archived_sessions', `${sessionId}.jsonl`);
-  if (existsSync(codexArchived)) return codexArchived;
-
-  return null;
-}
-
-/**
- * Extract the last N human turns from a session transcript.
- * Returns an array of message strings, oldest first.
- */
-function extractPrecedingContext(transcriptPath, turns = 1) {
-  if (!transcriptPath) return [];
-
-  try {
-    const lines = readFileSync(transcriptPath, 'utf8')
-      .split('\n')
-      .filter(Boolean);
-
-    const humanMessages = [];
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        // Claude Code JSONL: { type: "user", message: { role: "user", content: [...] } }
-        // Content may be a string or array of blocks.
-        if (entry.type === 'user' || entry.message?.role === 'user') {
-          const content = entry.message?.content ?? entry.content;
-          let text = '';
-          if (typeof content === 'string') {
-            text = content;
-          } else if (Array.isArray(content)) {
-            text = content
-              .filter(b => b.type === 'text')
-              .map(b => b.text)
-              .join('\n')
-              .trim();
-          }
-          if (text) humanMessages.push(text);
-        }
-      } catch {
-        // skip unparseable lines
-      }
-    }
-
-    return humanMessages.slice(-turns);
-  } catch {
-    return [];
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Comment body
-// ---------------------------------------------------------------------------
-
-function buildCommentBody(sessionId, source, contextMessages) {
-  const ts = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const lines = [`🤖 **${source}** · session \`${sessionId}\` · ${ts}`];
-
-  if (contextMessages.length > 0) {
-    lines.push('');
-    for (const msg of contextMessages) {
-      // Quote the message, truncate long ones
-      const truncated = msg.length > 500 ? msg.slice(0, 497) + '…' : msg;
-      lines.push(`> ${truncated.replace(/\n/g, '\n> ')}`);
-    }
-  }
-
-  return lines.join('\n');
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -180,12 +83,8 @@ async function main() {
     process.exit(0);
   }
 
-  const apiKey = process.env.LINEAR_API_KEY;
-  if (!apiKey) {
-    process.stderr.write('[groove/stop] LINEAR_API_KEY not set — skipping provenance comments\n');
-    process.exit(0);
-  }
-
+  // Check for items before warning about missing key — no need to surface
+  // configuration warnings when there's nothing to post.
   const stateDir = process.env.GROOVE_STATE_DIR ?? join(homedir(), '.groove');
   const itemsFile = join(stateDir, 'provenance', `${session_id}.items.jsonl`);
 
@@ -193,6 +92,12 @@ async function main() {
 
   const contents = readFileSync(itemsFile, 'utf8').trim();
   if (!contents) process.exit(0);
+
+  const apiKey = process.env.LINEAR_API_KEY;
+  if (!apiKey) {
+    process.stderr.write('[groove/stop] LINEAR_API_KEY not set — skipping provenance comments\n');
+    process.exit(0);
+  }
 
   const items = contents.split('\n').filter(Boolean).map(line => {
     try { return JSON.parse(line); } catch { return null; }
