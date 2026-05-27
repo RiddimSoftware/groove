@@ -7,28 +7,36 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  pr-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Check package structure
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate SKILL.md (agentskills spec)
         run: |
-          node --input-type=module <<'EOF'
-          import { existsSync } from 'fs';
-          const required = [
-            'packages/issue-standards/SKILL.md',
-            'packages/issue-standards/bin/setup.mjs',
-            'packages/linear-agent-hooks/hooks/post-tool-use.mjs',
-            'packages/linear-agent-hooks/hooks/stop.mjs',
-            'packages/linear-agent-hooks/bin/setup.mjs',
-          ];
-          let ok = true;
-          for (const f of required) {
-            if (!existsSync(f)) { console.error(`Missing: ${f}`); ok = false; }
-          }
-          if (!ok) process.exit(1);
-          console.log('All required files present.');
-          EOF
+          pip install -q "git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref"
+          skills-ref validate packages/issue-standards
+
+      - name: Syntax check
+        run: |
+          node --check packages/linear-agent-hooks/hooks/post-tool-use.mjs
+          node --check packages/linear-agent-hooks/hooks/stop.mjs
+          node --check packages/linear-agent-hooks/lib/comment.mjs
+          node --check packages/linear-agent-hooks/lib/transcript.mjs
+          node --check packages/linear-agent-hooks/bin/setup.mjs
+          node --check packages/issue-standards/bin/setup.mjs
+
+      - name: Run tests
+        run: |
+          node --test \
+            packages/linear-agent-hooks/tests/post-tool-use.test.mjs \
+            packages/linear-agent-hooks/tests/stop.test.mjs \
+            packages/linear-agent-hooks/tests/comment.test.mjs \
+            packages/linear-agent-hooks/tests/transcript.test.mjs

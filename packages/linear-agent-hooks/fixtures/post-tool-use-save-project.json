@@ -1,0 +1,16 @@
+{
+  "session_id": "abc123def456",
+  "tool_name": "mcp__852c51d3-c3ae-4813-8f86-6e0893d9ef71__save_project",
+  "tool_input": {
+    "name": "Test project",
+    "teamIds": ["96468a5a-c0fe-4a4e-ac71-8281442b2184"]
+  },
+  "tool_response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"id\":\"68cbfc88-4719-4855-8c76-ba8b194fd81f\",\"name\":\"Test project\",\"url\":\"https://linear.app/acmecorp/project/test-project-68cbfc88\"}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"add pagination to the search results API"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll implement pagination for the search results API."}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"also add a page size limit of 100"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll cap the page size at 100 as well."}]}}
