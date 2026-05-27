@@ -22,6 +22,14 @@ Claude Code and Codex hooks that automatically post a provenance comment back to
 npx linear-agent-hooks setup
 ```
 
+### [`llm-cost-attribution`](packages/llm-cost-attribution)
+
+Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no custom telemetry pipeline required. Works out of the box with any orchestrator that follows the [Symphony Telemetry Extension Spec](specs/symphony-telemetry-extension)'s worktree convention.
+
+```bash
+npx llm-cost-attribution EPAC-1940
+```
+
 ---
 
 These tools are independent. Install one, both, or neither — there's no coupling between them.
