@@ -96,31 +96,88 @@ Requires Node 20+. Zero runtime dependencies.
 
 ```
 llm-cost <ISSUE-ID> [options]
+llm-cost <ISSUE-ID> --from-usage <usage.jsonl-or-dir>
 llm-cost list
+llm-cost backfill --out <usage.jsonl-path>
 llm-cost --help
 
 Options:
   --cwd-pattern <regex>   JS regex matching the cwd; one capture group is the issue ID.
-                          Default: [.\-]symphony[/-]workspaces[/-]([A-Z]+-\d+)$
+                          Default matches both `<system-temp>/symphony_workspaces/<ID>`
+                          and `<repo>/.symphony/workspaces/<ID>` (raw or Claude-encoded).
   --claude-dir <path>     Override ~/.claude/projects.
   --codex-dir <path>      Override ~/.codex/sessions.
+  --from-usage <path>     Read from a usage.jsonl file or directory of `usage*.jsonl`
+                          files instead of the CLI transcripts. See "Delete transcripts,
+                          keep cost history" below.
+  --out <path>            (backfill only) Destination usage.jsonl path. Appended.
   --json                  Emit JSON instead of a table.
   -h, --help              Print help.
 ```
 
+## Delete transcripts, keep cost history
+
+Transcripts are large — a few MB per session, growing to gigabytes across an active factory — and most of the bytes are conversation content the cost tool doesn't need. The [Symphony Coding-Agent Cost Telemetry Extension specification](https://github.com/RiddimSoftware/groove/blob/main/specs/symphony-cost-telemetry-extension/SPEC.md) defines a narrow append-only stream, `usage.jsonl`, that captures the cost-relevant projection of every turn (~1 KB per row, no prompt or response content) — designed so you can keep years of cost history in megabytes after deleting the transcripts the records were derived from.
+
+This package both **reads** the spec format and can **backfill** it from existing transcripts:
+
+```bash
+# Bake every transcript on this machine into one usage.jsonl file.
+llm-cost backfill --out ~/llm-cost-history.jsonl
+
+# Cost queries now run against the much smaller file:
+llm-cost EPAC-1940 --from-usage ~/llm-cost-history.jsonl
+
+# Once you've verified the numbers match, transcripts are safe to delete:
+rm -rf ~/.claude/projects ~/.codex/sessions
+```
+
+Real-world numbers from a working factory:
+
+| | Before backfill | After backfill |
+|---|---:|---:|
+| Disk footprint | 5.0 GB | 83 MB (60× smaller) |
+| `llm-cost EPAC-1940` query time | ~3 min (full Codex scan) | ~0.3 s |
+
+A `usage.jsonl` file can also be checked into a private repo, shipped to a billing host, or queried from CI without access to the machine that produced the agent sessions. The cost data outlives the transcripts.
+
+### Fidelity tradeoff
+
+The spec deliberately keeps only the cost-relevant fields. After backfilling, you lose three things the raw transcripts could tell you:
+
+- The Claude cache-tier split (5m vs 1h cache creation tokens)
+- The Codex reasoning-vs-visible output split
+- Codex per-window quota samples (`rate_limits.{primary,secondary}.used_percent`)
+
+Token grand totals, per-turn ordinal, model, timestamps, run/session IDs, and workspace-path provenance are all preserved exactly. If you need any of the dropped signals for a specific issue, keep the transcripts for those issues.
+
 ## Library
 
 ```js
-import { computeIssueCost, listKnownIssues } from 'llm-cost-attribution';
+import {
+  computeIssueCost,
+  computeIssueCostFromUsage,
+  backfillUsageFromTranscripts,
+  listKnownIssues,
+} from 'llm-cost-attribution';
 
+// Read from transcripts directly:
 const rollup = await computeIssueCost('EPAC-1940');
 console.log(rollup.combinedTokens);
 console.log(rollup.providerTotals.codex.quotaSamples);
 
-const allIssues = await listKnownIssues();
+// Or read from a backfilled usage.jsonl:
+const rollup2 = await computeIssueCostFromUsage('EPAC-1940', '~/llm-cost-history.jsonl');
+
+// Backfill programmatically:
+const result = await backfillUsageFromTranscripts({
+  outFile: '/tmp/usage.jsonl',
+  onProgress: ({ phase, processed, total }) => console.log(`${phase}: ${processed}/${total}`),
+});
+console.log(`Wrote ${result.recordsWritten} records`);
 ```
 
-Pass `{ cwdPattern, claudeProjectsDir, codexSessionsDir }` to either function to override defaults.
+Pass `{ cwdPattern, claudeProjectsDir, codexSessionsDir }` to override defaults on any of the above.
 
 ## What it doesn't (and can't) do
 

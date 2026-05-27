@@ -17,7 +17,12 @@
  * for the issue identifier.
  */
 import { parseArgs } from 'node:util';
-import { computeIssueCost, listKnownIssues } from '../src/index.mjs';
+import {
+  backfillUsageFromTranscripts,
+  computeIssueCost,
+  computeIssueCostFromUsage,
+  listKnownIssues,
+} from '../src/index.mjs';
 import { DEFAULT_CWD_PATTERN } from '../src/issue-pattern.mjs';
 import { formatDuration, formatNumber } from '../src/util.mjs';
 
@@ -28,6 +33,8 @@ async function main() {
       'cwd-pattern': { type: 'string' },
       'claude-dir': { type: 'string' },
       'codex-dir': { type: 'string' },
+      'from-usage': { type: 'string' },
+      out: { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -46,6 +53,29 @@ async function main() {
   if (values['codex-dir'] !== undefined) options.codexSessionsDir = values['codex-dir'];
 
   const command = positionals[0];
+
+  // `llm-cost backfill --out <path>` walks transcripts and writes spec-compliant usage.jsonl.
+  if (command === 'backfill') {
+    if (values.out === undefined || values.out === '') {
+      console.error('error: backfill requires --out <path>');
+      process.exit(1);
+    }
+    process.stderr.write(`> backfilling usage.jsonl to ${values.out} ...\n`);
+    const result = await backfillUsageFromTranscripts({
+      ...options,
+      outFile: values.out,
+      onProgress: (p) => {
+        process.stderr.write(`  ${p.phase}: ${p.processed}/${p.total}  (${p.recordsWritten} records written)\r`);
+      },
+    });
+    process.stderr.write('\n');
+    process.stderr.write(
+      `Wrote ${result.recordsWritten} usage records from ${result.sessionsProcessed} sessions ` +
+      `(${result.sessionsSkipped} sessions skipped).\n`,
+    );
+    return;
+  }
+
   if (command === 'list') {
     const ids = await listKnownIssues(options);
     if (values.json === true) {
@@ -57,28 +87,45 @@ async function main() {
   }
 
   // Default: treat the positional as an issue identifier and produce its rollup.
+  // If --from-usage is given, read from usage.jsonl; otherwise from transcripts.
   const issueIdentifier = command;
-  const rollup = await computeIssueCost(issueIdentifier, options);
+  const rollup = values['from-usage'] !== undefined
+    ? await computeIssueCostFromUsage(issueIdentifier, values['from-usage'])
+    : await computeIssueCost(issueIdentifier, options);
   if (values.json === true) {
     console.log(JSON.stringify(rollup, null, 2));
     return;
   }
-  printRollup(rollup);
+  printRollup(rollup, values['from-usage'] !== undefined);
 }
 
 function printUsage() {
   console.log(`Usage: llm-cost <ISSUE-ID> [options]
+       llm-cost <ISSUE-ID> --from-usage <usage.jsonl-or-dir>
        llm-cost list
+       llm-cost backfill --out <usage.jsonl-path>
        llm-cost --help
 
 Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions.
 
+Sources:
+  By default, reads ~/.claude/projects and ~/.codex/sessions (the CLI's own
+  transcripts). Pass --from-usage to read from a Symphony Coding-Agent Cost
+  Telemetry Extension usage.jsonl file or directory instead — useful after
+  you've backfilled and deleted the transcripts.
+
 Options:
   --cwd-pattern <regex>   Regex matching the cwd, with one capture group for the
-                          issue identifier. Default matches the Symphony Telemetry
-                          Extension Spec convention (\`.symphony/workspaces/<ID>\`).
+                          issue identifier. Default matches Symphony's
+                          \`<workspace.root>/<ISSUE-ID>\` convention (spec default
+                          \`symphony_workspaces/<ID>\` and the common in-repo
+                          \`.symphony/workspaces/<ID>\` form).
   --claude-dir <path>     Override ~/.claude/projects.
   --codex-dir <path>      Override ~/.codex/sessions.
+  --from-usage <path>     Read from a usage.jsonl file or directory of
+                          \`usage*.jsonl\` files (per the cost-telemetry spec)
+                          instead of from the CLI transcripts.
+  --out <path>            (backfill only) Destination usage.jsonl path. Appended.
   --json                  Emit machine-readable JSON instead of the table.
   -h, --help              Print this message.
 
@@ -87,15 +134,20 @@ Examples:
   llm-cost EPAC-1940 --json | jq .providerTotals.codex.quotaSamples
   llm-cost list | grep EPAC
   llm-cost EPAC-1940 --cwd-pattern '/issues/([A-Z]+-\\d+)$'
+
+  # Bake every transcript on this machine into a usage.jsonl, then it's safe
+  # to rm -rf ~/.claude/projects and ~/.codex/sessions.
+  llm-cost backfill --out ~/llm-cost-history.jsonl
+  llm-cost EPAC-1940 --from-usage ~/llm-cost-history.jsonl
 `);
 }
 
 const HEAD = '═'.repeat(72);
 const SEP = '─'.repeat(72);
 
-function printRollup(rollup) {
+function printRollup(rollup, fromUsageJsonl = false) {
   console.log(HEAD);
-  console.log(`LLM COST  —  ${rollup.issueIdentifier}`);
+  console.log(`LLM COST  —  ${rollup.issueIdentifier}${fromUsageJsonl ? '   (source: usage.jsonl)' : ''}`);
   console.log(HEAD);
   console.log(`Sessions found:       ${rollup.combinedSessions}`);
   console.log(`Total turns:          ${formatNumber(rollup.combinedTurns)}`);
