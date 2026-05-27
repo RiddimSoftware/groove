@@ -178,7 +178,7 @@ Pass `{ cwdPattern, claudeProjectsDir, codexSessionsDir }` to override defaults 
 
 - **Story-point estimate axis.** Estimates live in your issue tracker (Linear / Jira / GitHub Projects), not in the CLI transcripts. To get cost-vs-estimate rollups you'd need to join issue-tracker data — out of scope for this package.
 - **Attempt counts.** The CLI doesn't record "this was attempt #N of M"; if you ran `claude` 5 times on the same issue, this package sees 5 sessions but can't tell you which one shipped.
-- **PR-merge state, CI status, reviewer verdicts.** These come from GitHub or your orchestrator, not from the CLIs. A Symphony-conformant orchestrator records these in its own telemetry — but this package deliberately stops at the boundary of "what's in the CLI transcript."
+- **PR-merge state, CI status, reviewer verdicts.** These come from GitHub, not from the CLIs — and the Symphony spec explicitly out-of-scopes them (§2.2 Non-Goals, §11.5): ticket mutations and PR outcomes are delegated to the coding agent's tooling, not recorded by the orchestrator. This package stops at the same boundary: "what's in the CLI transcript."
 - **Anything in the Claude Desktop app, claude.ai, ChatGPT, or direct API SDK calls.** Only Claude Code CLI and Codex CLI sessions are stored in the directories this package reads.
 - **Cost in dollars.** Token counts only. Multiply by the pricing of your plan to get a dollar estimate — but if you're on Claude Max / Codex Pro, the marginal cost is your quota, not dollars, which is exactly what the Codex quota readout shows.
 
