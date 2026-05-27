@@ -15,6 +15,15 @@ jobs:
         with:
           node-version: 20
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate SKILL.md (agentskills spec)
+        run: |
+          pip install -q "git+https://github.com/agentskills/agentskills.git#subdirectory=skills-ref"
+          skills-ref validate packages/issue-standards
+
       - name: Syntax check
         run: |
           node --check packages/linear-agent-hooks/hooks/post-tool-use.mjs
