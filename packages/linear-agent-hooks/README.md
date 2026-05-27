@@ -44,16 +44,30 @@ comment to each Linear issue via the Linear API.
 
 Neither hook blocks the session or produces visible output.
 
+> **Why does the Stop hook need its own API key?**
+> The Stop hook is a standalone Node.js script that runs _after_ the Claude
+> session ends — there is no active MCP connection at that point. It calls the
+> Linear GraphQL API directly using `LINEAR_API_KEY`. This is the same key
+> that powers the Linear MCP server; you don't need a separate credential.
+
 ## Requirements
 
 - Node.js 18+
 - A Linear API key — create one at linear.app → Settings → API
 
-Set the key in your shell profile:
+### Setting the API key
+
+The key must be in your shell profile **before you start Claude or Codex**.
+Hook scripts run as subprocesses that inherit the environment from when Claude
+launched, so a key exported only in the current terminal won't reach them.
 
 ```bash
+# Add to ~/.zshrc, ~/.bashrc, or equivalent
 export LINEAR_API_KEY="lin_api_..."
 ```
+
+Then open a new terminal (or `source ~/.zshrc`) before starting Claude.
+This is the same key the Linear MCP server uses — no separate credential needed.
 
 ## Configuration
 
@@ -63,6 +77,22 @@ export LINEAR_API_KEY="lin_api_..."
 | `GROOVE_STATE_DIR` | `~/.groove` | State directory for session files |
 | `GROOVE_CONTEXT_TURNS` | `1` | User turns to include in provenance comment |
 | `GROOVE_DISABLED` | — | Set to `1` to disable without uninstalling |
+
+## Backfill
+
+If the Stop hook couldn't post comments for a session — for example, because
+`LINEAR_API_KEY` wasn't set in the environment when Claude launched — you can
+backfill those sessions later:
+
+```bash
+export LINEAR_API_KEY="lin_api_..."
+npx linear-agent-hooks backfill
+```
+
+The backfill command scans `~/.groove/provenance/` for sessions that created
+Linear issues but didn't receive provenance comments, and posts them now.
+Already-commented issues are tracked in per-session `.done` files and skipped
+automatically, so it's safe to run multiple times.
 
 ## Uninstall
 

@@ -1,9 +1,10 @@
 /**
- * Tests for hooks/stop.mjs — behavioral / no-op paths.
+ * Tests for hooks/stop.mjs — behavioral / no-op paths and done-set tracking.
  *
  * The Linear API-calling path is not tested here (requires a real key).
- * These tests cover every early-exit branch so CI catches regressions in the
- * failure modes that would silently break the user's experience.
+ * These tests cover every early-exit branch and the done-set idempotency
+ * contract so CI catches regressions in the failure modes that would silently
+ * break the user's experience.
  *
  * Run: node --test packages/linear-agent-hooks/tests/stop.test.mjs
  */
@@ -11,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,5 +125,79 @@ test('exits 0 with warning when runtime source cannot be determined', () => {
     // API call and log a comment-posting error — that's acceptable.
     // The important contract is: exit code is always 0.
     assert.equal(result.status, 0);
+  } finally { cleanup(tmpDir); }
+});
+
+test('no-key warning mentions backfill command', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'groove-stop-nokey2-'));
+  writeItems(tmpDir, 'sess-bf', [{ linearId: 'ENG-4', kind: 'issue', toolName: 'x', createdAt: new Date().toISOString() }]);
+  try {
+    const env = { ...process.env, GROOVE_STATE_DIR: tmpDir, CLAUDE_CODE_ENTRYPOINT: 'cli' };
+    delete env.LINEAR_API_KEY;
+    const result = spawnSync(process.execPath, [HOOK], {
+      input: makePayload('sess-bf'),
+      encoding: 'utf8',
+      env,
+    });
+    assert.equal(result.status, 0);
+    assert.match(result.stderr, /backfill/);
+  } finally { cleanup(tmpDir); }
+});
+
+test('writes done file after processing (even with fake key / api failure)', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'groove-stop-done-'));
+  const sessionId = 'sess-done-test';
+  writeItems(tmpDir, sessionId, [{ linearId: 'ENG-5', kind: 'issue', toolName: 'x', createdAt: new Date().toISOString() }]);
+  try {
+    const env = {
+      ...process.env,
+      GROOVE_STATE_DIR: tmpDir,
+      LINEAR_API_KEY: 'lin_api_fake',
+    };
+    delete env.CLAUDE_CODE_ENTRYPOINT;
+    delete env.CODEX_SESSION;
+    spawnSync(process.execPath, [HOOK], {
+      input: makePayload(sessionId),
+      encoding: 'utf8',
+      env,
+    });
+    // Even when the API call fails, the done file should be written
+    // (with whatever IDs did succeed — in this case zero, but the file exists).
+    const doneFile = join(tmpDir, 'provenance', `${sessionId}.done`);
+    assert.ok(existsSync(doneFile), '.done file should exist after stop hook runs');
+    const ids = JSON.parse(readFileSync(doneFile, 'utf8'));
+    assert.ok(Array.isArray(ids), '.done file should contain a JSON array');
+  } finally { cleanup(tmpDir); }
+});
+
+test('skips issues already in done set', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'groove-stop-skip-'));
+  const sessionId = 'sess-skip-test';
+  writeItems(tmpDir, sessionId, [
+    { linearId: 'ENG-10', kind: 'issue', toolName: 'x', createdAt: new Date().toISOString() },
+    { linearId: 'ENG-11', kind: 'issue', toolName: 'x', createdAt: new Date().toISOString() },
+  ]);
+  // Pre-populate done set with ENG-10
+  const provenanceDir = join(tmpDir, 'provenance');
+  mkdirSync(provenanceDir, { recursive: true });
+  writeFileSync(join(provenanceDir, `${sessionId}.done`), JSON.stringify(['ENG-10']), 'utf8');
+  try {
+    const env = {
+      ...process.env,
+      GROOVE_STATE_DIR: tmpDir,
+      LINEAR_API_KEY: 'lin_api_fake',
+    };
+    delete env.CLAUDE_CODE_ENTRYPOINT;
+    delete env.CODEX_SESSION;
+    const result = spawnSync(process.execPath, [HOOK], {
+      input: makePayload(sessionId),
+      encoding: 'utf8',
+      env,
+    });
+    assert.equal(result.status, 0);
+    // ENG-10 was in done set — only ENG-11 should have been attempted.
+    // With a fake key the API call for ENG-11 fails and logs an error.
+    // ENG-10 should NOT appear in stderr (it was skipped silently).
+    assert.ok(!result.stderr.includes('ENG-10'), 'ENG-10 should not appear in stderr (already done)');
   } finally { cleanup(tmpDir); }
 });
