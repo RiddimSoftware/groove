@@ -1,0 +1,23 @@
+{
+  "name": "issue-standards",
+  "version": "0.1.0",
+  "description": "A Claude Code skill for writing autonomously implementable issues",
+  "type": "module",
+  "bin": {
+    "issue-standards": "./bin/setup.mjs"
+  },
+  "files": [
+    "bin/",
+    "SKILL.md",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RiddimSoftware/groove.git",
+    "directory": "packages/issue-standards"
+  }
+}

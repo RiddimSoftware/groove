@@ -1,0 +1,23 @@
+{
+  "name": "linear-agent-hooks",
+  "version": "0.1.0",
+  "description": "Claude Code and Codex hooks that post provenance comments back to Linear issues your agent creates",
+  "type": "module",
+  "bin": {
+    "linear-agent-hooks": "./bin/setup.mjs"
+  },
+  "files": [
+    "bin/",
+    "hooks/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RiddimSoftware/groove.git",
+    "directory": "packages/linear-agent-hooks"
+  }
+}

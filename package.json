@@ -1,0 +1,7 @@
+{
+  "name": "groove",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
+}
