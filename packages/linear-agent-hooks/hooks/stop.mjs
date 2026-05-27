@@ -14,6 +14,9 @@
  *
  * Required:
  *   LINEAR_API_KEY   Your Linear API key (lin_api_...)
+ *                    Same key used by the Linear MCP server. Must be exported
+ *                    in your shell profile before launching Claude or Codex so
+ *                    this hook inherits it.
  *
  * Optional:
  *   GROOVE_STATE_DIR        Override state directory (default: ~/.groove)
@@ -21,9 +24,9 @@
  *   GROOVE_CONTEXT_TURNS    Number of preceding user turns to include (default: 1)
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { buildCommentBody } from '../lib/comment.mjs';
 import { findTranscript, extractPrecedingContext } from '../lib/transcript.mjs';
 
@@ -61,6 +64,37 @@ async function postLinearComment(issueId, body, apiKey) {
 }
 
 // ---------------------------------------------------------------------------
+// Done-set helpers (track which issues have already received a comment)
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the set of Linear IDs that have already been commented for a session.
+ * Returns an empty Set if the done file doesn't exist or can't be parsed.
+ */
+function loadDoneSet(doneFile) {
+  if (!existsSync(doneFile)) return new Set();
+  try {
+    const ids = JSON.parse(readFileSync(doneFile, 'utf8'));
+    return new Set(Array.isArray(ids) ? ids : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Persist the set of Linear IDs that have been commented for a session.
+ * Safe to call multiple times — always overwrites with the latest state.
+ */
+function saveDoneSet(doneFile, doneSet) {
+  try {
+    mkdirSync(dirname(doneFile), { recursive: true });
+    writeFileSync(doneFile, JSON.stringify([...doneSet], null, 2) + '\n', 'utf8');
+  } catch {
+    // best-effort
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -95,7 +129,10 @@ async function main() {
 
   const apiKey = process.env.LINEAR_API_KEY;
   if (!apiKey) {
-    process.stderr.write('[groove/stop] LINEAR_API_KEY not set — skipping provenance comments\n');
+    process.stderr.write(
+      '[groove/stop] LINEAR_API_KEY not set — skipping provenance comments\n' +
+      '[groove/stop] Set it in your shell profile and run: npx linear-agent-hooks backfill\n'
+    );
     process.exit(0);
   }
 
@@ -116,13 +153,19 @@ async function main() {
   const contextMessages = extractPrecedingContext(transcriptPath, contextTurns);
   const body = buildCommentBody(session_id, source, contextMessages);
 
-  // Post a comment to each Linear issue created this session.
+  // Load the done set so we skip issues that were already commented
+  // (handles re-runs and partial failures gracefully).
+  const doneFile = join(stateDir, 'provenance', `${session_id}.done`);
+  const doneSet = loadDoneSet(doneFile);
+
+  // Post a comment to each Linear issue not yet in the done set.
   // Projects and initiatives don't support comments the same way — skip for now.
-  const issues = items.filter(item => item.kind === 'issue');
+  const issues = items.filter(item => item.kind === 'issue' && !doneSet.has(item.linearId));
 
   for (const item of issues) {
     try {
       await postLinearComment(item.linearId, body, apiKey);
+      doneSet.add(item.linearId);
     } catch (err) {
       process.stderr.write(
         `[groove/stop] failed to post comment to ${item.linearId}: ${err.message}\n`
@@ -130,6 +173,9 @@ async function main() {
       // Continue — don't let one failure block the rest
     }
   }
+
+  // Persist the done set so backfill won't re-post what already succeeded.
+  saveDoneSet(doneFile, doneSet);
 
   process.exit(0);
 }
