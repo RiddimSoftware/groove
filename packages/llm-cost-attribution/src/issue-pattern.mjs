@@ -4,28 +4,35 @@
  * what shape their cwd takes; this module decides whether a given cwd
  * belongs to a given issue.
  *
- * The default convention matches the Symphony Telemetry Extension
- * Specification: one git worktree per issue at
- * `<repo>/.symphony/workspaces/<ISSUE-ID>`. Any orchestrator that conforms
- * to that spec (Symphony, Autopilot, etc.) produces transcripts this
- * package can read without configuration.
+ * The default pattern matches the two most common `workspace.root` settings
+ * for a Symphony-conformant orchestrator
+ * (https://github.com/openai/symphony/blob/main/SPEC.md):
  *
- * The pattern is a JavaScript regex (no flags) that:
- *   - matches against the FULL cwd string (raw) or the encoded Claude
- *     project directory name (where `/` and `.` have been replaced by `-`),
- *   - has exactly one capture group, which is the issue identifier.
+ *   1. The spec default, `<system-temp>/symphony_workspaces/<ID>`
+ *      (e.g. `/tmp/symphony_workspaces/EPAC-1940`).
+ *   2. The in-repo override, `<repo>/.symphony/workspaces/<ID>`
+ *      (e.g. `/Users/x/code/repo/.symphony/workspaces/EPAC-1940`).
  *
- * Examples:
- *   /[.\-]symphony[/-]workspaces[/-]([A-Z]+-\d+)$/   (default; matches Symphony)
- *   /\/issues\/([A-Z]+-\d+)$/                        (matches `~/code/issues/PROJ-12`)
- *   /-([A-Z]+-\d+)$/                                 (matches any cwd ending `-PROJ-12`)
+ * Both place the workspace_key (the sanitized issue identifier) as the last
+ * path component of the cwd, satisfying the spec's Invariant 1
+ * (`cwd == workspace_path`). For other `workspace.root` settings, pass
+ * `--cwd-pattern '<regex>'` with one capture group for the issue ID.
+ *
+ * The pattern matches against either:
+ *   - the FULL cwd string (raw, as recorded in Codex `session_meta.cwd`), or
+ *   - the encoded Claude project directory name (where `/` and `.` have both
+ *     been replaced by `-`).
+ *
+ * Examples of caller-supplied patterns:
+ *   /\/issues\/([A-Z]+-\d+)$/    (matches `~/code/issues/PROJ-12`)
+ *   /-([A-Z]+-\d+)$/             (matches any cwd ending `-PROJ-12`)
  */
 
-// Matches both the raw cwd form `.../.symphony/workspaces/<ID>` and the
-// Claude-encoded form `...--symphony-workspaces-<ID>` (where `/` and `.`
-// both become `-`). The leading `[.\-]` covers either the literal dot or
-// the encoded dash that replaced it.
-export const DEFAULT_CWD_PATTERN = /[.\-]symphony[/-]workspaces[/-]([A-Z]+-\d+)$/;
+// Both Symphony-default `symphony_workspaces/<ID>` and the common in-repo
+// `.symphony/workspaces/<ID>` form, in either raw or Claude-encoded shape
+// (`/` and `.` both become `-` in Claude's project-dir encoding).
+export const DEFAULT_CWD_PATTERN =
+  /(?:symphony_workspaces|[.\-]symphony[/-]workspaces)[/-]([A-Za-z0-9._-]+)$/;
 
 /**
  * Extract the issue identifier from a Codex-style raw cwd path

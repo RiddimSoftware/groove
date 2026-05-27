@@ -30,17 +30,22 @@ CODEX  (4 sessions)
     7d window  56% → 57% used  (peak 57%)
 ```
 
-## Designed for Symphony-spec workflows
+## Designed for Symphony workflows
 
-`llm-cost` works out of the box with any autonomous-developer setup that follows the [Symphony Telemetry Extension Specification](https://github.com/RiddimSoftware/groove/tree/main/specs/symphony-telemetry-extension) — i.e. one git worktree per issue at:
+[OpenAI Symphony's specification](https://github.com/openai/symphony/blob/main/SPEC.md) requires that each issue gets its own filesystem workspace, and that the coding agent's `cwd` equals that workspace path:
 
-```
-<repo>/.symphony/workspaces/<ISSUE-ID>
-```
+- **§4.1.4 Workspace** — "Filesystem workspace assigned to one issue identifier."
+- **Workspace path formula** — `<workspace.root>/<sanitized_issue_identifier>`.
+- **Invariant 1** — "Run the coding agent only in the per-issue workspace path... validate: `cwd == workspace_path`."
 
-Symphony, Autopilot, and any other Symphony-spec-conformant orchestrator put each dispatch's working directory in that predictable place. The CLI agents (Claude Code, Codex CLI) record that working directory in every session they create, so the issue identifier travels with the transcript automatically — no joining against custom telemetry needed.
+Because of those requirements, the working directory of every Claude Code or Codex CLI session that Symphony (or any Symphony-spec-conformant orchestrator) launches always carries the issue identifier as its last path component. The CLI agents in turn record that `cwd` in every session JSONL they create. So the issue identifier is already in the transcript — no custom telemetry pipeline needed to join.
 
-If your workflow uses a different cwd convention, pass `--cwd-pattern '<regex>'` with one capture group for the issue identifier — see "[The convention](#the-convention)" below.
+This package's default `--cwd-pattern` matches the two most common `workspace.root` configurations:
+
+1. The Symphony spec default: `<system-temp>/symphony_workspaces/<ISSUE-ID>` (e.g. `/tmp/symphony_workspaces/EPAC-1940`).
+2. A common in-repo override: `<repo>/.symphony/workspaces/<ISSUE-ID>` (used by Autopilot and the Riddim factory's Symphony config).
+
+For any other `workspace.root` setting, pass `--cwd-pattern '<regex>'` with one capture group for the issue identifier — see "[The convention](#the-convention)".
 
 ## How it works
 
@@ -61,23 +66,22 @@ This package walks both directories, filters sessions whose working directory ma
 
 ## The convention
 
-You map sessions to issues via the **working directory at session start**. By default this package matches the Symphony-spec convention:
+You map sessions to issues via the **working directory at session start**. The Symphony spec guarantees that the workspace_key (the sanitized issue identifier) is the last path component of the agent's `cwd`. The only thing that varies between deployments is the parent directory — the `workspace.root` setting in `WORKFLOW.md`.
 
-```
-<repo>/.symphony/workspaces/<ISSUE-ID>
-```
-
-A regex extracts `<ISSUE-ID>`. If your workflow uses a different layout, pass `--cwd-pattern '<regex>'` with one capture group:
+By default this package matches the two common `workspace.root` values listed above. If yours is different:
 
 ```bash
-# Your workflow uses ../repo-worktrees/<ID>
-llm-cost FOO-12 --cwd-pattern '-([A-Z]+-\d+)$'
+# workspace.root = ~/work, so cwd is `/Users/x/work/EPAC-1940`
+llm-cost EPAC-1940 --cwd-pattern '/work/([A-Z]+-\d+)$'
 
-# Your workflow uses ~/issues/<id>/
+# workspace.root = ~/issues, with numeric issue IDs
 llm-cost 1234 --cwd-pattern '/issues/(\d+)$'
+
+# Worktree-suffix convention (e.g. `../repo-worktrees/PROJ-12`)
+llm-cost PROJ-12 --cwd-pattern '-([A-Z]+-\d+)$'
 ```
 
-If your workflow doesn't give each issue its own working directory (e.g. you switch branches in a single checkout), this package can't disambiguate sessions for you — see "[What it doesn't (and can't) do](#what-it-doesnt-and-cant-do)" below.
+If your workflow doesn't give each issue its own working directory (e.g. you switch branches in a single checkout), this package can't disambiguate sessions for you — see "[What it doesn't (and can't) do](#what-it-doesnt-and-cant-do)" below. The Symphony spec's Invariant 1 exists precisely to make per-issue attribution possible at this layer; without it the issue→session join has to happen somewhere else.
 
 ## Install
 
@@ -101,7 +105,8 @@ llm-cost --help
 
 Options:
   --cwd-pattern <regex>   JS regex matching the cwd; one capture group is the issue ID.
-                          Default: [.\-]symphony[/-]workspaces[/-]([A-Z]+-\d+)$
+                          Default matches `<system-temp>/symphony_workspaces/<ID>` AND
+                          `<repo>/.symphony/workspaces/<ID>` (raw or Claude-encoded).
   --claude-dir <path>     Override ~/.claude/projects.
   --codex-dir <path>      Override ~/.codex/sessions.
   --json                  Emit JSON instead of a table.
@@ -126,7 +131,7 @@ Pass `{ cwdPattern, claudeProjectsDir, codexSessionsDir }` to either function to
 
 - **Story-point estimate axis.** Estimates live in your issue tracker (Linear / Jira / GitHub Projects), not in the CLI transcripts. To get cost-vs-estimate rollups you'd need to join issue-tracker data — out of scope for this package.
 - **Attempt counts.** The CLI doesn't record "this was attempt #N of M"; if you ran `claude` 5 times on the same issue, this package sees 5 sessions but can't tell you which one shipped.
-- **PR-merge state, CI status, reviewer verdicts.** These come from GitHub or your orchestrator, not from the CLIs. A Symphony-conformant orchestrator records these in its own telemetry — but this package deliberately stops at the boundary of "what's in the CLI transcript."
+- **PR-merge state, CI status, reviewer verdicts.** These come from GitHub or your orchestrator, not from the CLIs.
 - **Anything in the Claude Desktop app, claude.ai, ChatGPT, or direct API SDK calls.** Only Claude Code CLI and Codex CLI sessions are stored in the directories this package reads.
 - **Cost in dollars.** Token counts only. Multiply by the pricing of your plan to get a dollar estimate — but if you're on Claude Max / Codex Pro, the marginal cost is your quota, not dollars, which is exactly what the Codex quota readout shows.
 
