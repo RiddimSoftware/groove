@@ -3,20 +3,23 @@
  * produces from raw transcripts. Keeps the CLI output identical regardless
  * of which source the cost data came from.
  *
- * The usage.jsonl spec is intentionally narrower than what the CLI
- * transcripts carry:
- *   - There is no per-bucket breakdown of input tokens (no cache 5m / 1h
- *     split, no reasoning-vs-visible output split). We surface the totals
- *     in `inputUncached` / `outputVisible` and leave the other buckets at
- *     zero.
- *   - There are no rate_limits / quota samples. Quota tracking requires the
- *     raw transcript.
+ * As of spec v1 with the §5.2.{1,2,3} additions, every signal the
+ * transcript carried is preserved on backfill:
+ *   - input/output token breakdowns
+ *   - Claude cache-tier split (ephemeral 5m vs 1h)
+ *   - Codex reasoning-vs-visible output split
+ *   - Codex per-window quota samples (`quota` object per record)
  *
- * Operators who care about cache-tier splits or quota should keep the
- * transcripts; those who only care about token totals can safely delete
- * transcripts after backfilling to usage.jsonl.
+ * When reading records produced by a writer that did NOT emit the OPTIONAL
+ * breakdown fields, this aggregator falls back to crediting the entire
+ * `inputTokens` to `inputUncached` and `outputTokens` to `outputVisible`.
+ * Grand totals are correct either way.
  */
 import { emptyProviderTotals } from './aggregator.mjs';
+
+function numOr0(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
 
 /**
  * @param {string} issueIdentifier
@@ -37,11 +40,49 @@ export function rollupUsageRecords(issueIdentifier, records) {
 
     const totals = providerTotals[rec.provider];
     totals.turnCount += 1;
-    // Per the spec, usage records carry input/output totals; we record them
-    // as if they were entirely "uncached"/"visible" since the spec doesn't
-    // preserve the bucket split. The grand total is what matters.
-    totals.tokens.inputUncached += rec.inputTokens ?? 0;
-    totals.tokens.outputVisible += rec.outputTokens ?? 0;
+
+    // Prefer the §5.2.1 breakdown fields when present; fall back to the
+    // REQUIRED inputTokens total when not.
+    const hasInputBreakdown =
+      typeof rec.inputUncachedTokens === 'number' ||
+      typeof rec.inputCachedReadTokens === 'number' ||
+      typeof rec.inputCacheWriteTokens === 'number';
+    if (hasInputBreakdown) {
+      totals.tokens.inputUncached += numOr0(rec.inputUncachedTokens);
+      totals.tokens.inputCached += numOr0(rec.inputCachedReadTokens);
+      totals.tokens.cacheCreate5m += numOr0(rec.inputCacheWriteEphemeral5mTokens);
+      totals.tokens.cacheCreate1h += numOr0(rec.inputCacheWriteEphemeral1hTokens);
+      // If a writer emitted inputCacheWriteTokens but didn't split by tier
+      // (a non-Anthropic provider with a single cache tier, say), credit
+      // the unattributed write tokens to inputUncached so the grand total
+      // still matches.
+      const splitTotal = numOr0(rec.inputCacheWriteEphemeral5mTokens) + numOr0(rec.inputCacheWriteEphemeral1hTokens);
+      const writeTotal = numOr0(rec.inputCacheWriteTokens);
+      if (writeTotal > splitTotal) totals.tokens.inputUncached += (writeTotal - splitTotal);
+    } else {
+      totals.tokens.inputUncached += rec.inputTokens ?? 0;
+    }
+
+    // §5.2.2 output breakdown.
+    const hasOutputBreakdown =
+      typeof rec.outputVisibleTokens === 'number' || typeof rec.outputReasoningTokens === 'number';
+    if (hasOutputBreakdown) {
+      totals.tokens.outputVisible += numOr0(rec.outputVisibleTokens);
+      totals.tokens.outputReasoning += numOr0(rec.outputReasoningTokens);
+    } else {
+      totals.tokens.outputVisible += rec.outputTokens ?? 0;
+    }
+
+    // §5.2.3 quota — propagate the full per-turn sample if present.
+    if (rec.quota !== undefined && rec.quota !== null && typeof rec.quota === 'object' && Array.isArray(rec.quota.windows)) {
+      totals.quotaSamples.push({
+        provider: rec.provider,
+        timestamp: typeof rec.endedAt === 'string' ? rec.endedAt : '',
+        planType: typeof rec.quota.planType === 'string' ? rec.quota.planType : null,
+        windows: rec.quota.windows,
+      });
+    }
+
     if (typeof rec.model === 'string' && rec.model !== '') modelSets[rec.provider].add(rec.model);
     if (typeof rec.runID === 'string' && rec.runID !== '') sessionsSeen[rec.provider].add(rec.runID);
     const startedAt = typeof rec.startedAt === 'string' ? rec.startedAt : null;

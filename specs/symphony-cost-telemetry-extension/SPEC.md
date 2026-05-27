@@ -313,12 +313,74 @@ them when the underlying value is available; readers MUST tolerate their absence
 - `cooldownReason` (string or `null`)
   - Free-form reason for a post-turn cooldown (e.g. rate-limit recovery). Not parsed by readers.
 
+#### 5.2.1 Input-Token Breakdown
+
+The REQUIRED `inputTokens` field is the total billable input the turn consumed. The following
+OPTIONAL fields refine that total into provider-reported sub-buckets. They MUST be emitted when
+the provider's response carries the breakdown; readers MUST tolerate any subset being absent.
+
+- `inputUncachedTokens` (integer ≥ 0)
+  - Subset of `inputTokens` that the provider treated as fresh prompt content (no cache hit, no
+    cache write). All conformant providers report this.
+
+- `inputCachedReadTokens` (integer ≥ 0)
+  - Subset of `inputTokens` served from a prior cache write. All conformant providers that
+    support prompt caching report this.
+
+- `inputCacheWriteTokens` (integer ≥ 0)
+  - Subset of `inputTokens` that wrote to a provider-side prompt cache during this turn.
+    Providers that bundle cache writes into their cached total (current Codex behavior) MAY
+    omit this field.
+
+- `inputCacheWriteEphemeral5mTokens` (integer ≥ 0)
+- `inputCacheWriteEphemeral1hTokens` (integer ≥ 0)
+  - Anthropic-only sub-buckets of `inputCacheWriteTokens` distinguishing the 5-minute and
+    1-hour ephemeral cache tiers (`cache_creation.ephemeral_5m_input_tokens`,
+    `cache_creation.ephemeral_1h_input_tokens` in the Anthropic API). Providers that do not
+    distinguish ephemeral tiers MUST omit both fields.
+
+#### 5.2.2 Output-Token Breakdown
+
+- `outputVisibleTokens` (integer ≥ 0)
+  - Subset of `outputTokens` returned to the caller as visible response content.
+
+- `outputReasoningTokens` (integer ≥ 0)
+  - Subset of `outputTokens` consumed by hidden reasoning (OpenAI o-series-style
+    `reasoning_output_tokens`). Providers that do not separately bill reasoning tokens MUST
+    omit this field.
+
+#### 5.2.3 Quota Sample
+
+- `quota` (object)
+  - A point-in-time sample of the provider's rate-limit state at the end of this turn. Useful
+    for plan-based cost models where the marginal cost of a turn is "what fraction of your
+    quota window did it move?" rather than a dollar figure.
+  - Implementations MUST emit `quota` when the provider's response includes a rate-limit
+    payload, and MUST omit it otherwise.
+  - REQUIRED sub-fields when present:
+    - `planType` (string) — provider plan identifier (e.g. `pro`, `business`, `enterprise`).
+    - `windows` (array of objects, length ≥ 1) — one entry per rate-limit window the provider
+      tracks. Each window object has:
+      - `label` (string) — provider-specific window label. RESERVED values: `primary`,
+        `secondary`. Implementations MAY define additional labels (e.g. `monthly`); readers
+        MUST treat unrecognized labels as opaque.
+      - `windowMinutes` (integer ≥ 0) — width of the window in minutes.
+      - `usedPercent` (number, 0 ≤ x ≤ 100) — percentage consumed at sample time.
+  - OPTIONAL sub-fields:
+    - `resetsAt` (integer Unix epoch seconds) — moment at which the window's `usedPercent`
+      returns to zero. Producers that cannot derive this MAY omit it.
+
 ### 5.3 Field Semantics
 
 - The triple `(inputTokens, outputTokens, totalTokens)` MUST be internally consistent when all
   three are non-null: `totalTokens == inputTokens + outputTokens` SHOULD hold, with deviations
   allowed only when the provider's reported total differs from the component sum (in which case
   the provider-reported total MUST be preserved as-is).
+- When the §5.2.1 input breakdown fields are present, their sum SHOULD equal `inputTokens`. The
+  same SHOULD relation holds between `inputCacheWriteEphemeral5mTokens` +
+  `inputCacheWriteEphemeral1hTokens` and `inputCacheWriteTokens`.
+- When the §5.2.2 output breakdown fields are both present, their sum SHOULD equal
+  `outputTokens`.
 - `recordedAt - endedAt` SHOULD be small (under one second in normal operation) so consumers can
   treat `endedAt` as both the event time and the wall-clock end of the turn.
 - `startedAt ≤ endedAt` MUST hold.

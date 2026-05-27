@@ -30,17 +30,22 @@ CODEX  (4 sessions)
     7d window  56% → 57% used  (peak 57%)
 ```
 
-## Designed for Symphony-spec workflows
+## Designed for Symphony workflows
 
-`llm-cost` works out of the box with any autonomous-developer setup that follows the [Symphony Telemetry Extension Specification](https://github.com/RiddimSoftware/groove/tree/main/specs/symphony-telemetry-extension) — i.e. one git worktree per issue at:
+[OpenAI Symphony's specification](https://github.com/openai/symphony/blob/main/SPEC.md) requires that each issue gets its own filesystem workspace, and that the coding agent's `cwd` equals that workspace path:
 
-```
-<repo>/.symphony/workspaces/<ISSUE-ID>
-```
+- **§4.1.4 Workspace** — "Filesystem workspace assigned to one issue identifier."
+- **Workspace path formula** — `<workspace.root>/<sanitized_issue_identifier>`.
+- **Invariant 1** — "Run the coding agent only in the per-issue workspace path... validate: `cwd == workspace_path`."
 
-Symphony, Autopilot, and any other Symphony-spec-conformant orchestrator put each dispatch's working directory in that predictable place. The CLI agents (Claude Code, Codex CLI) record that working directory in every session they create, so the issue identifier travels with the transcript automatically — no joining against custom telemetry needed.
+Because of those requirements, the working directory of every Claude Code or Codex CLI session that Symphony (or any Symphony-spec-conformant orchestrator) launches always carries the issue identifier as its last path component. The CLI agents in turn record that `cwd` in every session JSONL they create. So the issue identifier is already in the transcript — no custom telemetry pipeline needed to join.
 
-If your workflow uses a different cwd convention, pass `--cwd-pattern '<regex>'` with one capture group for the issue identifier — see "[The convention](#the-convention)" below.
+This package's default `--cwd-pattern` matches the two most common `workspace.root` configurations:
+
+1. The Symphony spec default: `<system-temp>/symphony_workspaces/<ISSUE-ID>` (e.g. `/tmp/symphony_workspaces/EPAC-1940`).
+2. A common in-repo override: `<repo>/.symphony/workspaces/<ISSUE-ID>` (used by Autopilot and the Riddim factory's Symphony config).
+
+For any other `workspace.root` setting, pass `--cwd-pattern '<regex>'` with one capture group for the issue identifier — see "[The convention](#the-convention)" below.
 
 ## How it works
 
@@ -115,14 +120,12 @@ Options:
   -h, --help              Print help.
 ```
 
-## Delete transcripts, keep cost history
+## Delete transcripts, keep cost history (optional)
 
-Transcripts are large — a few MB per session, growing to gigabytes across an active factory — and most of the bytes are conversation content the cost tool doesn't need. The [Symphony Coding-Agent Cost Telemetry Extension specification](https://github.com/RiddimSoftware/groove/blob/main/specs/symphony-cost-telemetry-extension/SPEC.md) defines a narrow append-only stream, `usage.jsonl`, that captures the cost-relevant projection of every turn (~1 KB per row, no prompt or response content) — designed so you can keep years of cost history in megabytes after deleting the transcripts the records were derived from.
-
-This package both **reads** the spec format and can **backfill** it from existing transcripts:
+Transcripts are large — a few MB per session, growing to gigabytes across an active factory — and most of the bytes are conversation content the cost tool doesn't need. So `llm-cost` can **bake** every transcript into a small append-only JSONL file (~1 KB per turn, no prompt or response content), then read cost queries from that file instead. After the bake, transcripts are safe to delete.
 
 ```bash
-# Bake every transcript on this machine into one usage.jsonl file.
+# Bake every transcript on this machine into one file.
 llm-cost backfill --out ~/llm-cost-history.jsonl
 
 # Cost queries now run against the much smaller file:
@@ -136,20 +139,12 @@ Real-world numbers from a working factory:
 
 | | Before backfill | After backfill |
 |---|---:|---:|
-| Disk footprint | 5.0 GB | 83 MB (60× smaller) |
+| Disk footprint | 5.0 GB | 125 MB (40× smaller) |
 | `llm-cost EPAC-1940` query time | ~3 min (full Codex scan) | ~0.3 s |
 
-A `usage.jsonl` file can also be checked into a private repo, shipped to a billing host, or queried from CI without access to the machine that produced the agent sessions. The cost data outlives the transcripts.
+The backfill is lossless for everything the cost analysis cares about — including the Codex per-window quota readout, the Claude cache-tier split (5m vs 1h), and the Codex reasoning-vs-visible output split. Token grand totals, turn counts, models, timestamps, and workspace-path provenance are preserved exactly. The bake file can also be checked into a private repo, shipped to a billing host, or queried from CI without access to the machine that produced the agent sessions.
 
-### Fidelity tradeoff
-
-The spec deliberately keeps only the cost-relevant fields. After backfilling, you lose three things the raw transcripts could tell you:
-
-- The Claude cache-tier split (5m vs 1h cache creation tokens)
-- The Codex reasoning-vs-visible output split
-- Codex per-window quota samples (`rate_limits.{primary,secondary}.used_percent`)
-
-Token grand totals, per-turn ordinal, model, timestamps, run/session IDs, and workspace-path provenance are all preserved exactly. If you need any of the dropped signals for a specific issue, keep the transcripts for those issues.
+This whole flow is a built-in feature of the package — you don't need to know anything about the file format to use it. As a side benefit: the format follows the [Symphony Coding-Agent Cost Telemetry Extension spec](https://github.com/RiddimSoftware/groove/blob/main/specs/symphony-cost-telemetry-extension/SPEC.md), so any other tool that conforms can read or write the same file (e.g. a Symphony-spec-conformant orchestrator can emit `usage.jsonl` directly during runs, skipping the bake step entirely). That interop is purely optional; the package works exactly the same whether you care about the spec or not.
 
 ## Library
 

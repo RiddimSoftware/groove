@@ -7,14 +7,20 @@ import {
 } from '../src/issue-pattern.mjs';
 
 describe('DEFAULT_CWD_PATTERN against raw Codex cwd strings', () => {
-  it('extracts the issue identifier from a Symphony workspace path', () => {
+  it('extracts the issue identifier from a `.symphony/workspaces/` path', () => {
     const cwd = '/Users/sunny/code/epac/.symphony/workspaces/EPAC-1940';
     assert.equal(issueFromCwd(cwd, DEFAULT_CWD_PATTERN), 'EPAC-1940');
   });
 
+  it('extracts the issue identifier from a Symphony-spec-default `symphony_workspaces/` path', () => {
+    // The Symphony spec defaults `workspace.root` to `<system-temp>/symphony_workspaces`.
+    assert.equal(issueFromCwd('/tmp/symphony_workspaces/EPAC-1940', DEFAULT_CWD_PATTERN), 'EPAC-1940');
+    assert.equal(issueFromCwd('/var/folders/abc/symphony_workspaces/PROJ-7', DEFAULT_CWD_PATTERN), 'PROJ-7');
+  });
+
   it('returns null for a path that is not a Symphony workspace', () => {
-    const cwd = '/Users/sunny/code/epac';
-    assert.equal(issueFromCwd(cwd, DEFAULT_CWD_PATTERN), null);
+    assert.equal(issueFromCwd('/Users/sunny/code/epac', DEFAULT_CWD_PATTERN), null);
+    assert.equal(issueFromCwd('/Users/sunny/code/myrepo/src', DEFAULT_CWD_PATTERN), null);
   });
 
   it('requires the issue id to be at the end of the path', () => {

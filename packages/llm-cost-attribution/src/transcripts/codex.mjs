@@ -108,19 +108,28 @@ export async function parseCodexSession(file) {
 
     const rateLimits = payload.rate_limits;
     if (rateLimits !== undefined && rateLimits !== null) {
-      const primary = rateLimits.primary;
-      const secondary = rateLimits.secondary;
-      quotaSamples.push({
-        provider: 'codex',
-        timestamp: ts,
-        primaryUsedPercent: numericOrZero(primary?.used_percent),
-        secondaryUsedPercent: numericOrZero(secondary?.used_percent),
-        primaryWindowMinutes: numericOrZero(primary?.window_minutes),
-        secondaryWindowMinutes: numericOrZero(secondary?.window_minutes),
-        primaryResetsAt: typeof primary?.resets_at === 'number' ? primary.resets_at : null,
-        secondaryResetsAt: typeof secondary?.resets_at === 'number' ? secondary.resets_at : null,
-        planType: typeof rateLimits.plan_type === 'string' ? rateLimits.plan_type : null,
-      });
+      // Build the spec §5.2.3 `quota` shape directly so the same structure
+      // round-trips through usage.jsonl without lossy reshaping.
+      const windows = [];
+      for (const [label, src] of [['primary', rateLimits.primary], ['secondary', rateLimits.secondary]]) {
+        if (!src) continue;
+        if (typeof src.window_minutes !== 'number' || src.window_minutes <= 0) continue;
+        const w = {
+          label,
+          windowMinutes: src.window_minutes,
+          usedPercent: numericOrZero(src.used_percent),
+        };
+        if (typeof src.resets_at === 'number') w.resetsAt = src.resets_at;
+        windows.push(w);
+      }
+      if (windows.length > 0) {
+        quotaSamples.push({
+          provider: 'codex',
+          timestamp: ts,
+          planType: typeof rateLimits.plan_type === 'string' ? rateLimits.plan_type : null,
+          windows,
+        });
+      }
     }
   }
 

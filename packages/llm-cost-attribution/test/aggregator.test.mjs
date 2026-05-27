@@ -53,9 +53,11 @@ describe('rollupSessions', () => {
         quotaSamples: [
           {
             provider: 'codex', timestamp: '2026-05-01T00:02:00Z',
-            primaryUsedPercent: 12, secondaryUsedPercent: 45,
-            primaryWindowMinutes: 300, secondaryWindowMinutes: 10080,
-            primaryResetsAt: 1, secondaryResetsAt: 2, planType: 'pro',
+            planType: 'pro',
+            windows: [
+              { label: 'primary', windowMinutes: 300, usedPercent: 12, resetsAt: 1 },
+              { label: 'secondary', windowMinutes: 10080, usedPercent: 45, resetsAt: 2 },
+            ],
           },
         ],
       }),
@@ -86,7 +88,10 @@ describe('rollupSessions', () => {
     );
 
     assert.equal(r.providerTotals.codex.quotaSamples.length, 1);
-    assert.equal(r.providerTotals.codex.quotaSamples[0].primaryUsedPercent, 12);
+    assert.equal(r.providerTotals.codex.quotaSamples[0].windows[0].label, 'primary');
+    assert.equal(r.providerTotals.codex.quotaSamples[0].windows[0].usedPercent, 12);
+    assert.equal(r.providerTotals.codex.quotaSamples[0].windows[1].label, 'secondary');
+    assert.equal(r.providerTotals.codex.quotaSamples[0].windows[1].usedPercent, 45);
   });
 
   it('captures first/last timestamps and deduplicates models', () => {

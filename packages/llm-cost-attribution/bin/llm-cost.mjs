@@ -10,11 +10,12 @@
  *   llm-cost --help
  *
  * Reads from `~/.claude/projects` and `~/.codex/sessions`. The default
- * cwd-to-issue regex matches the convention described in the Symphony
- * Telemetry Extension Specification (worktree per issue at
- * `<repo>/.symphony/workspaces/<ISSUE>`). To match a different convention,
- * pass `--cwd-pattern` with a JavaScript regex containing one capture group
- * for the issue identifier.
+ * cwd-to-issue regex matches the Symphony spec's per-issue workspace
+ * convention (https://github.com/openai/symphony/blob/main/SPEC.md §4.1.4),
+ * covering both the default `<system-temp>/symphony_workspaces/<ID>` and
+ * the common `<repo>/.symphony/workspaces/<ID>` `workspace.root` settings.
+ * For any other layout, pass `--cwd-pattern` with a JavaScript regex
+ * containing one capture group for the issue identifier.
  */
 import { parseArgs } from 'node:util';
 import {
@@ -191,25 +192,52 @@ function printProvider(label, totals) {
   if (label === 'CODEX' && totals.quotaSamples.length > 0) {
     const first = totals.quotaSamples[0];
     const last = totals.quotaSamples[totals.quotaSamples.length - 1];
-    const peak5h = totals.quotaSamples.reduce((m, s) => Math.max(m, s.primaryUsedPercent), 0);
-    const peak7d = totals.quotaSamples.reduce((m, s) => Math.max(m, s.secondaryUsedPercent), 0);
     console.log();
     console.log(`  Quota  (plan_type=${first.planType ?? '?'}, ${totals.quotaSamples.length} samples):`);
-    console.log(
-      `    ${first.primaryWindowMinutes / 60}h window  ` +
-      `${first.primaryUsedPercent.toFixed(0)}% → ${last.primaryUsedPercent.toFixed(0)}% used  ` +
-      `(peak ${peak5h.toFixed(0)}%)`,
-    );
-    console.log(
-      `    ${(first.secondaryWindowMinutes / 60 / 24).toFixed(0)}d window  ` +
-      `${first.secondaryUsedPercent.toFixed(0)}% → ${last.secondaryUsedPercent.toFixed(0)}% used  ` +
-      `(peak ${peak7d.toFixed(0)}%)`,
-    );
+    // Render every window the provider exposed, by label. Pulls first/last/peak
+    // for each label across the sample series.
+    const labels = uniqueWindowLabels(totals.quotaSamples);
+    for (const lbl of labels) {
+      const firstW = findWindow(first, lbl);
+      const lastW = findWindow(last, lbl);
+      if (firstW === undefined || lastW === undefined) continue;
+      const peak = totals.quotaSamples.reduce((m, s) => {
+        const w = findWindow(s, lbl);
+        return w === undefined ? m : Math.max(m, w.usedPercent);
+      }, 0);
+      console.log(
+        `    ${formatWindow(firstW.windowMinutes).padEnd(8)} ${lbl.padEnd(10)} ` +
+        `${firstW.usedPercent.toFixed(0)}% → ${lastW.usedPercent.toFixed(0)}% used  ` +
+        `(peak ${peak.toFixed(0)}%)`,
+      );
+    }
   } else if (label === 'CODEX') {
-    console.log('  Quota:              not captured (no rate_limits events in transcript)');
+    console.log('  Quota:              not captured (no rate_limits in record)');
   } else {
     console.log('  Quota:              not exposed by Claude');
   }
+}
+
+function findWindow(sample, label) {
+  if (!sample || !Array.isArray(sample.windows)) return undefined;
+  return sample.windows.find((w) => w.label === label);
+}
+
+function uniqueWindowLabels(samples) {
+  const labels = new Set();
+  for (const s of samples) {
+    if (!Array.isArray(s.windows)) continue;
+    for (const w of s.windows) {
+      if (typeof w.label === 'string') labels.add(w.label);
+    }
+  }
+  return [...labels];
+}
+
+function formatWindow(minutes) {
+  if (minutes >= 60 * 24) return `${(minutes / 60 / 24).toFixed(0)}d`;
+  if (minutes >= 60) return `${(minutes / 60).toFixed(0)}h`;
+  return `${minutes}m`;
 }
 
 function spanMs(first, last) {
