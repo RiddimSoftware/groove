@@ -45,4 +45,6 @@ jobs:
             packages/linear-agent-hooks/tests/comment.test.mjs \
             packages/linear-agent-hooks/tests/transcript.test.mjs \
             packages/llm-cost-attribution/test/issue-pattern.test.mjs \
-            packages/llm-cost-attribution/test/aggregator.test.mjs
+            packages/llm-cost-attribution/test/aggregator.test.mjs \
+            packages/llm-cost-attribution/test/usage-jsonl.test.mjs \
+            packages/llm-cost-attribution/test/transcript-to-usage.test.mjs
