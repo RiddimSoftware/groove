@@ -24,11 +24,13 @@ npx linear-agent-hooks setup
 
 ### [`llm-cost-attribution`](packages/llm-cost-attribution)
 
-Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no custom telemetry pipeline required. Works out of the box with any orchestrator that follows the [Symphony Telemetry Extension Spec](specs/symphony-telemetry-extension)'s worktree convention.
+Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no custom telemetry pipeline required. Works out of the box with any orchestrator that follows [OpenAI Symphony's](https://github.com/openai/symphony/blob/main/SPEC.md) per-issue workspace convention.
 
 ```bash
 npx llm-cost-attribution EPAC-1940
 ```
+
+Optionally bake transcripts into a compact `usage.jsonl` (40× smaller) so you can delete `~/.claude/projects` and `~/.codex/sessions` without losing cost history. The bake file follows the [Symphony Coding-Agent Cost Telemetry Extension spec](specs/symphony-cost-telemetry-extension) so other tools can read it too — but that interop is purely optional.
 
 ---
 
