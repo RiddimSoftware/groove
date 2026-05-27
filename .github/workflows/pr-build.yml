@@ -1,0 +1,34 @@
+name: pr-build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check package structure
+        run: |
+          node --input-type=module <<'EOF'
+          import { existsSync } from 'fs';
+          const required = [
+            'packages/issue-standards/SKILL.md',
+            'packages/issue-standards/bin/setup.mjs',
+            'packages/linear-agent-hooks/hooks/post-tool-use.mjs',
+            'packages/linear-agent-hooks/hooks/stop.mjs',
+            'packages/linear-agent-hooks/bin/setup.mjs',
+          ];
+          let ok = true;
+          for (const f of required) {
+            if (!existsSync(f)) { console.error(`Missing: ${f}`); ok = false; }
+          }
+          if (!ok) process.exit(1);
+          console.log('All required files present.');
+          EOF
