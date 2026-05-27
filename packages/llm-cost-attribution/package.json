@@ -1,0 +1,41 @@
+{
+  "name": "llm-cost-attribution",
+  "version": "0.1.0",
+  "description": "Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no telemetry pipeline required.",
+  "type": "module",
+  "bin": {
+    "llm-cost": "./bin/llm-cost.mjs"
+  },
+  "main": "./src/index.mjs",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test 'test/**/*.test.mjs'"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "openai",
+    "anthropic",
+    "tokens",
+    "cost",
+    "telemetry",
+    "agentic",
+    "autonomous-developer",
+    "symphony"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RiddimSoftware/groove.git",
+    "directory": "packages/llm-cost-attribution"
+  }
+}
