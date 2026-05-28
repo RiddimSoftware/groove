@@ -26,6 +26,18 @@ export {
   appendUsageRecords,
   validateUsageRecord,
 } from './usage-jsonl.mjs';
+export {
+  PRICING_TABLE,
+  STALE_AFTER_DAYS,
+} from './pricing-rates.mjs';
+export {
+  calculateCost,
+  daysSincePricingVerified,
+  hypotheticalNoteFor,
+  isPricingStale,
+  normalizeModelName,
+  ratesForModel,
+} from './pricing.mjs';
 
 /**
  * Read every Claude session whose encoded project directory name matches the
