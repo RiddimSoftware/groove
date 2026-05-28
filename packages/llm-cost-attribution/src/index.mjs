@@ -27,6 +27,11 @@ export {
   validateUsageRecord,
 } from './usage-jsonl.mjs';
 export {
+  computeMultiIssueRollup,
+  expandAllIssueArgs,
+  expandIssueArg,
+} from './multi-issue.mjs';
+export {
   PRICING_TABLE,
   STALE_AFTER_DAYS,
 } from './pricing-rates.mjs';
