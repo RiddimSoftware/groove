@@ -25,6 +25,7 @@ import {
   listKnownIssues,
 } from '../src/index.mjs';
 import { DEFAULT_CWD_PATTERN } from '../src/issue-pattern.mjs';
+import { computeMultiIssueRollup, expandAllIssueArgs } from '../src/multi-issue.mjs';
 import {
   calculateCost,
   daysSincePricingVerified,
@@ -94,35 +95,73 @@ async function main() {
     return;
   }
 
-  // Default: treat the positional as an issue identifier and produce its rollup.
-  // If --from-usage is given, read from usage.jsonl; otherwise from transcripts.
-  const issueIdentifier = command;
-  const rollup = values['from-usage'] !== undefined
-    ? await computeIssueCostFromUsage(issueIdentifier, values['from-usage'])
-    : await computeIssueCost(issueIdentifier, options);
+  // Default: treat positionals as issue identifiers (and/or inclusive ranges
+  // like EPAC-1990-1999) and produce the appropriate rollup.
   const withPricing = values['no-pricing'] !== true;
-  if (values.json === true) {
-    if (withPricing) attachPricingToRollup(rollup);
-    console.log(JSON.stringify(rollup, null, 2));
+  const fromUsage = values['from-usage'];
+
+  let expanded;
+  try {
+    expanded = expandAllIssueArgs(positionals);
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    process.exit(1);
+  }
+  if (expanded.ids.length === 0) {
+    console.error('error: no issue IDs supplied');
+    process.exit(1);
+  }
+
+  const loadOne = async (id) => fromUsage !== undefined
+    ? await computeIssueCostFromUsage(id, fromUsage)
+    : await computeIssueCost(id, options);
+
+  // Single issue → existing per-issue output (unchanged shape).
+  if (expanded.ids.length === 1) {
+    const rollup = await loadOne(expanded.ids[0]);
+    if (values.json === true) {
+      if (withPricing) attachPricingToRollup(rollup);
+      console.log(JSON.stringify(rollup, null, 2));
+      return;
+    }
+    printRollup(rollup, fromUsage !== undefined, withPricing);
     return;
   }
-  printRollup(rollup, values['from-usage'] !== undefined, withPricing);
+
+  // Multiple issues (explicit list and/or expanded range) → summary table.
+  const multi = await computeMultiIssueRollup(positionals, async (id) => {
+    const rollup = await loadOne(id);
+    if (withPricing) attachPricingToRollup(rollup);
+    return rollup;
+  });
+
+  if (values.json === true) {
+    console.log(JSON.stringify(multi, null, 2));
+    return;
+  }
+  printMultiIssueRollup(multi, fromUsage !== undefined, withPricing);
 }
 
 function attachPricingToRollup(rollup) {
   for (const provider of ['claude', 'codex']) {
     const totals = rollup.providerTotals[provider];
     if (totals.sessionCount === 0) continue;
-    const model = totals.models[0];
-    if (typeof model !== 'string' || model === '') continue;
-    const cost = calculateCost(model, totals.tokens);
+    // Prefer the first model with known rates. Synthetic markers like
+    // `<synthetic>` (Claude session-restart placeholder) sort alphabetically
+    // before real model names, so don't blindly take models[0].
+    let cost = null;
+    for (const model of totals.models) {
+      cost = calculateCost(model, totals.tokens);
+      if (cost !== null) break;
+    }
     if (cost === null) continue;
     totals.pricing = cost;
   }
 }
 
 function printUsage() {
-  console.log(`Usage: llm-cost <ISSUE-ID> [options]
+  console.log(`Usage: llm-cost <ISSUE-ID>... [options]
+       llm-cost <PREFIX-START-END>... [options]    (range, e.g. EPAC-1990-1999)
        llm-cost <ISSUE-ID> --from-usage <usage.jsonl-or-dir>
        llm-cost list
        llm-cost backfill --out <usage.jsonl-path>
@@ -153,6 +192,9 @@ Options:
 
 Examples:
   llm-cost EPAC-1940
+  llm-cost EPAC-1940 EPAC-1921 FAC-67                  # multiple issues, summary table
+  llm-cost EPAC-1990-1999                              # inclusive range (10 issues)
+  llm-cost EPAC-1990-1999 FAC-60-70                    # mix of ranges
   llm-cost EPAC-1940 --json | jq .providerTotals.codex.quotaSamples
   llm-cost list | grep EPAC
   llm-cost EPAC-1940 --cwd-pattern '/issues/([A-Z]+-\\d+)$'
@@ -166,6 +208,89 @@ Examples:
 
 const HEAD = '═'.repeat(72);
 const SEP = '─'.repeat(72);
+
+function printMultiIssueRollup(multi, fromUsageJsonl = false, withPricing = true) {
+  const hadDataCount = multi.issues.length;
+  const headerSrc = fromUsageJsonl ? '   (source: usage.jsonl)' : '';
+  console.log(HEAD);
+  console.log(`COST ROLLUP  —  ${multi.label}${headerSrc}`);
+  console.log(HEAD);
+  console.log(
+    `${multi.requestedCount} issue${multi.requestedCount === 1 ? '' : 's'} requested, ` +
+    `${hadDataCount} had data` +
+    (multi.requestedCount !== multi.requestedIds.length
+      ? `   (${multi.requestedCount - multi.requestedIds.length} duplicates dropped)`
+      : ''),
+  );
+  console.log();
+  if (hadDataCount === 0) {
+    console.log('No requested issues had any recorded sessions.');
+    if (multi.missing.length > 0) {
+      console.log();
+      console.log(`Missing: ${multi.missing.join(', ')}`);
+    }
+    return;
+  }
+
+  // Determine widest issue-id for column alignment.
+  const idWidth = Math.max(
+    multi.totals.issueIdentifier.length,
+    ...multi.issues.map((r) => r.issueIdentifier.length),
+  );
+
+  // Header.
+  console.log(
+    padRight('Issue', idWidth) +
+    '  ' + padLeft('Sessions', 9) +
+    '  ' + padLeft('Turns', 8) +
+    '  ' + padLeft('Tokens', 12) +
+    '  ' + padLeft('API cost', 10),
+  );
+  console.log(SEP);
+  for (const row of multi.issues) {
+    console.log(formatRow(row, idWidth));
+  }
+  console.log(SEP);
+  console.log(formatRow(multi.totals, idWidth));
+
+  if (multi.missing.length > 0) {
+    console.log();
+    if (multi.missing.length <= 8) {
+      console.log(`(skipped: ${multi.missing.join(', ')} — no sessions)`);
+    } else {
+      const shown = multi.missing.slice(0, 8).join(', ');
+      console.log(`(skipped: ${shown}, and ${multi.missing.length - 8} more — no sessions)`);
+    }
+  }
+
+  if (withPricing && isPricingStale()) {
+    console.log();
+    console.log(`  ⚠  Pricing table is ${daysSincePricingVerified()} days old — rates may be stale.`);
+  }
+}
+
+function formatRow(row, idWidth) {
+  return (
+    padRight(row.issueIdentifier, idWidth) +
+    '  ' + padLeft(String(row.sessionCount), 9) +
+    '  ' + padLeft(formatNumber(row.turnCount), 8) +
+    '  ' + padLeft(formatTokensCompact(row.tokens), 12) +
+    '  ' + padLeft(formatUsdOrDash(row.apiCostUsd), 10)
+  );
+}
+
+function formatUsdOrDash(usd) {
+  if (usd === null || usd === undefined) return '   —';
+  return formatUsd(usd);
+}
+
+function padRight(s, width) {
+  return s.length >= width ? s : s + ' '.repeat(width - s.length);
+}
+
+function padLeft(s, width) {
+  return s.length >= width ? s : ' '.repeat(width - s.length) + s;
+}
 
 function printRollup(rollup, fromUsageJsonl = false, withPricing = true) {
   console.log(HEAD);
