@@ -25,6 +25,12 @@ import {
   listKnownIssues,
 } from '../src/index.mjs';
 import { DEFAULT_CWD_PATTERN } from '../src/issue-pattern.mjs';
+import {
+  calculateCost,
+  daysSincePricingVerified,
+  hypotheticalNoteFor,
+  isPricingStale,
+} from '../src/pricing.mjs';
 import { formatDuration, formatNumber } from '../src/util.mjs';
 
 async function main() {
@@ -35,6 +41,7 @@ async function main() {
       'claude-dir': { type: 'string' },
       'codex-dir': { type: 'string' },
       'from-usage': { type: 'string' },
+      'no-pricing': { type: 'boolean' },
       out: { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -93,11 +100,25 @@ async function main() {
   const rollup = values['from-usage'] !== undefined
     ? await computeIssueCostFromUsage(issueIdentifier, values['from-usage'])
     : await computeIssueCost(issueIdentifier, options);
+  const withPricing = values['no-pricing'] !== true;
   if (values.json === true) {
+    if (withPricing) attachPricingToRollup(rollup);
     console.log(JSON.stringify(rollup, null, 2));
     return;
   }
-  printRollup(rollup, values['from-usage'] !== undefined);
+  printRollup(rollup, values['from-usage'] !== undefined, withPricing);
+}
+
+function attachPricingToRollup(rollup) {
+  for (const provider of ['claude', 'codex']) {
+    const totals = rollup.providerTotals[provider];
+    if (totals.sessionCount === 0) continue;
+    const model = totals.models[0];
+    if (typeof model !== 'string' || model === '') continue;
+    const cost = calculateCost(model, totals.tokens);
+    if (cost === null) continue;
+    totals.pricing = cost;
+  }
 }
 
 function printUsage() {
@@ -146,7 +167,7 @@ Examples:
 const HEAD = '═'.repeat(72);
 const SEP = '─'.repeat(72);
 
-function printRollup(rollup, fromUsageJsonl = false) {
+function printRollup(rollup, fromUsageJsonl = false, withPricing = true) {
   console.log(HEAD);
   console.log(`LLM COST  —  ${rollup.issueIdentifier}${fromUsageJsonl ? '   (source: usage.jsonl)' : ''}`);
   console.log(HEAD);
@@ -155,12 +176,17 @@ function printRollup(rollup, fromUsageJsonl = false) {
   console.log(`Total tokens:         ${formatNumber(rollup.combinedTokens)}`);
   console.log();
 
-  printProvider('CLAUDE', rollup.providerTotals.claude);
+  printProvider('CLAUDE', rollup.providerTotals.claude, withPricing);
   console.log();
-  printProvider('CODEX', rollup.providerTotals.codex);
+  printProvider('CODEX', rollup.providerTotals.codex, withPricing);
+
+  if (withPricing && isPricingStale()) {
+    console.log();
+    console.log(`  ⚠  Pricing table is ${daysSincePricingVerified()} days old — rates may be stale.`);
+  }
 }
 
-function printProvider(label, totals) {
+function printProvider(label, totals, withPricing = true) {
   console.log(SEP);
   console.log(`${label}  (${totals.sessionCount} session${totals.sessionCount === 1 ? '' : 's'})`);
   console.log(SEP);
@@ -189,6 +215,31 @@ function printProvider(label, totals) {
   console.log(`    ─────────────────────────────────`);
   console.log(`    grand total        ${pad(formatNumber(totals.tokensGrandTotal), 14)}`);
 
+  // Pricing block — API-equivalent dollar cost per bucket.
+  if (withPricing) {
+    const model = totals.models[0];
+    const cost = typeof model === 'string' && model !== '' ? calculateCost(model, totals.tokens) : null;
+    console.log();
+    if (cost === null) {
+      console.log(`  API-equivalent pricing: no rates for model "${model ?? '<unknown>'}"`);
+    } else {
+      const provider = label.toLowerCase();
+      const planType = totals.quotaSamples?.[0]?.planType ?? null;
+      const note = hypotheticalNoteFor(provider, planType);
+      const verifiedOn = cost.rates.verifiedOn;
+      console.log(`  API-equivalent pricing (${cost.model} @ rates verified ${verifiedOn}):`);
+      for (const row of cost.buckets) {
+        const tokensStr = formatTokensCompact(row.tokens);
+        const rateStr = formatRate(row.ratePerMillion);
+        console.log(
+          `    ${row.label.padEnd(18)} ${formatUsd(row.costUsd).padStart(8)}    (${tokensStr} × ${rateStr}/1M)`,
+        );
+      }
+      console.log(`    ───────────────────────────────────────────`);
+      console.log(`    total API cost     ${formatUsd(cost.totalUsd).padStart(8)}    [${note}]`);
+    }
+  }
+
   if (label === 'CODEX' && totals.quotaSamples.length > 0) {
     const first = totals.quotaSamples[0];
     const last = totals.quotaSamples[totals.quotaSamples.length - 1];
@@ -205,10 +256,12 @@ function printProvider(label, totals) {
         const w = findWindow(s, lbl);
         return w === undefined ? m : Math.max(m, w.usedPercent);
       }, 0);
+      const delta = lastW.usedPercent - firstW.usedPercent;
+      const deltaStr = delta > 0 ? `+${delta.toFixed(1)} pp` : `${delta.toFixed(1)} pp`;
       console.log(
         `    ${formatWindow(firstW.windowMinutes).padEnd(8)} ${lbl.padEnd(10)} ` +
         `${firstW.usedPercent.toFixed(0)}% → ${lastW.usedPercent.toFixed(0)}% used  ` +
-        `(peak ${peak.toFixed(0)}%)`,
+        `(peak ${peak.toFixed(0)}%, this issue moved ${deltaStr})`,
       );
     }
   } else if (label === 'CODEX') {
@@ -247,6 +300,25 @@ function spanMs(first, last) {
 
 function pad(s, width) {
   return s.length >= width ? s : ' '.repeat(width - s.length) + s;
+}
+
+function formatUsd(usd) {
+  if (usd === 0) return '$0.00';
+  if (usd < 0.01) return `<$0.01`;
+  if (usd >= 1000) return `$${usd.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+function formatTokensCompact(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function formatRate(perMillionUsd) {
+  if (perMillionUsd >= 1) return `$${perMillionUsd.toFixed(2)}`;
+  if (perMillionUsd >= 0.01) return `$${perMillionUsd.toFixed(3)}`;
+  return `$${perMillionUsd.toFixed(4)}`;
 }
 
 main().catch((err) => {

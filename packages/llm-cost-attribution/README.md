@@ -180,7 +180,24 @@ Pass `{ cwdPattern, claudeProjectsDir, codexSessionsDir }` to override defaults 
 - **Attempt counts.** The CLI doesn't record "this was attempt #N of M"; if you ran `claude` 5 times on the same issue, this package sees 5 sessions but can't tell you which one shipped.
 - **PR-merge state, CI status, reviewer verdicts.** These come from GitHub, not from the CLIs — and the Symphony spec explicitly out-of-scopes them (§2.2 Non-Goals, §11.5): ticket mutations and PR outcomes are delegated to the coding agent's tooling, not recorded by the orchestrator. This package stops at the same boundary: "what's in the CLI transcript."
 - **Anything in the Claude Desktop app, claude.ai, ChatGPT, or direct API SDK calls.** Only Claude Code CLI and Codex CLI sessions are stored in the directories this package reads.
-- **Cost in dollars.** Token counts only. Multiply by the pricing of your plan to get a dollar estimate — but if you're on Claude Max / Codex Pro, the marginal cost is your quota, not dollars, which is exactly what the Codex quota readout shows.
+
+## Pricing
+
+`llm-cost` shows API-equivalent dollar cost per bucket alongside the raw token counts, using a built-in rate table sourced from [anthropic.com/pricing](https://www.anthropic.com/pricing) and [platform.openai.com/docs/pricing](https://platform.openai.com/docs/pricing):
+
+```
+API-equivalent pricing (gpt-5.5 @ rates verified 2026-05-22):
+    input uncached        $7.59    (1.5M × $5.00/1M)
+    cache read           $25.51    (51.0M × $0.500/1M)
+    output (visible)      $1.34    (44.7K × $30.00/1M)
+    output (reasoning)    $0.56    (18.6K × $30.00/1M)
+    ───────────────────────────────────────────
+    total API cost       $35.00    [hypothetical — your Codex Pro plan covers this]
+```
+
+**This is a counterfactual, not your actual spend.** If you're on a subscription plan (Claude Max, Codex Pro, etc.), the dollar number represents what the same token volume would have cost on pay-as-you-go API — useful for comparison, but the marginal cost of running it on your actual plan is captured by the Codex quota readout above (`5h primary 58% → 64% used`), not by the dollar total.
+
+The CLI warns when the bundled rate table is more than 90 days old. Pass `--no-pricing` to suppress the block entirely.
 
 ## License
 
