@@ -59,6 +59,7 @@ export async function computeIssueCost(issueIdentifier, options = {}) {
   const cwdPattern = options.cwdPattern ?? DEFAULT_CWD_PATTERN;
   const claudeRootDir = options.claudeProjectsDir ?? join(homedir(), '.claude', 'projects');
   const codexRootDir = options.codexSessionsDir ?? join(homedir(), '.codex', 'sessions');
+  const onProgress = options.onProgress ?? (() => undefined);
 
   const sessions = [];
 
@@ -75,10 +76,13 @@ export async function computeIssueCost(issueIdentifier, options = {}) {
   }
 
   // Codex: session_meta.cwd match, scanned across all rollouts.
-  for (const file of await listCodexRollouts(codexRootDir)) {
-    const session = await parseCodexSession(file);
-    if (session === null) continue;
-    if (issueFromCwd(session.cwd, cwdPattern) === issueIdentifier) sessions.push(session);
+  const codexFiles = await listCodexRollouts(codexRootDir);
+  for (let i = 0; i < codexFiles.length; i++) {
+    const session = await parseCodexSession(codexFiles[i]);
+    if (session !== null && issueFromCwd(session.cwd, cwdPattern) === issueIdentifier) {
+      sessions.push(session);
+    }
+    onProgress({ phase: 'codex', processed: i + 1, total: codexFiles.length });
   }
 
   return rollupSessions(issueIdentifier, sessions);
@@ -98,6 +102,7 @@ export async function computeIssueCost(issueIdentifier, options = {}) {
 export async function computeWorktreeCost(worktreePath, options = {}) {
   const claudeRootDir = options.claudeProjectsDir ?? join(homedir(), '.claude', 'projects');
   const codexRootDir = options.codexSessionsDir ?? join(homedir(), '.codex', 'sessions');
+  const onProgress = options.onProgress ?? (() => undefined);
 
   const sessions = [];
 
@@ -105,16 +110,19 @@ export async function computeWorktreeCost(worktreePath, options = {}) {
   // `.` replaced by `-`. Look it up directly — no regex needed.
   const encodedPath = worktreePath.replace(/[/.]/g, '-');
   const claudeProjectDir = join(claudeRootDir, encodedPath);
-  for (const file of await listJsonlsRecursively(claudeProjectDir)) {
-    const session = await parseClaudeSession(file);
+  const claudeFiles = await listJsonlsRecursively(claudeProjectDir);
+  for (let i = 0; i < claudeFiles.length; i++) {
+    const session = await parseClaudeSession(claudeFiles[i]);
     if (session !== null) sessions.push(session);
+    onProgress({ phase: 'claude', processed: i + 1, total: claudeFiles.length });
   }
 
   // Codex: scan all rollouts, keep those whose session_meta.cwd matches exactly.
-  for (const file of await listCodexRollouts(codexRootDir)) {
-    const session = await parseCodexSession(file);
-    if (session === null) continue;
-    if (session.cwd === worktreePath) sessions.push(session);
+  const codexFiles = await listCodexRollouts(codexRootDir);
+  for (let i = 0; i < codexFiles.length; i++) {
+    const session = await parseCodexSession(codexFiles[i]);
+    if (session !== null && session.cwd === worktreePath) sessions.push(session);
+    onProgress({ phase: 'codex', processed: i + 1, total: codexFiles.length });
   }
 
   return rollupSessions(basename(worktreePath), sessions);

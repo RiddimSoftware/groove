@@ -63,6 +63,7 @@ async function main() {
   const options = { cwdPattern };
   if (values['claude-dir'] !== undefined) options.claudeProjectsDir = values['claude-dir'];
   if (values['codex-dir'] !== undefined) options.codexSessionsDir = values['codex-dir'];
+  if (process.stderr.isTTY) options.onProgress = makeProgressReporter();
 
   const withPricing = values['no-pricing'] !== true;
 
@@ -158,6 +159,23 @@ async function main() {
     return;
   }
   printMultiIssueRollup(multi, fromUsage !== undefined, withPricing);
+}
+
+/**
+ * Returns an onProgress callback that writes a live scan counter to stderr,
+ * overwriting the same line each tick. Clears the line when the Codex phase
+ * completes so the output table starts on a clean line.
+ * Only wired up when stderr is a TTY (not when piping --json output).
+ */
+function makeProgressReporter() {
+  return ({ phase, processed, total }) => {
+    const pct = total === 0 ? 100 : Math.round((processed / total) * 100);
+    process.stderr.write(
+      `  scanning ${phase} sessions: ${processed.toLocaleString()} / ${total.toLocaleString()}  (${pct}%)\r`,
+    );
+    // Clear the line once each phase finishes so the results table is uncluttered.
+    if (processed === total) process.stderr.write(' '.repeat(60) + '\r');
+  };
 }
 
 function attachPricingToRollup(rollup) {
