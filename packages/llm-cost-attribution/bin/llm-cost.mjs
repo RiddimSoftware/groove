@@ -17,11 +17,13 @@
  * For any other layout, pass `--cwd-pattern` with a JavaScript regex
  * containing one capture group for the issue identifier.
  */
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   backfillUsageFromTranscripts,
   computeIssueCost,
   computeIssueCostFromUsage,
+  computeWorktreeCost,
   listKnownIssues,
 } from '../src/index.mjs';
 import { DEFAULT_CWD_PATTERN } from '../src/issue-pattern.mjs';
@@ -43,13 +45,14 @@ async function main() {
       'codex-dir': { type: 'string' },
       'from-usage': { type: 'string' },
       'no-pricing': { type: 'boolean' },
+      worktree: { type: 'string' },
       out: { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
 
-  if (values.help === true || positionals.length === 0) {
+  if (values.help === true || (positionals.length === 0 && values.worktree === undefined)) {
     printUsage();
     process.exit(values.help === true ? 0 : 1);
   }
@@ -60,6 +63,22 @@ async function main() {
   const options = { cwdPattern };
   if (values['claude-dir'] !== undefined) options.claudeProjectsDir = values['claude-dir'];
   if (values['codex-dir'] !== undefined) options.codexSessionsDir = values['codex-dir'];
+
+  const withPricing = values['no-pricing'] !== true;
+
+  // `llm-cost --worktree <path>` — attribute cost to a directory directly,
+  // with no issue identifier or Symphony convention required.
+  if (values.worktree !== undefined) {
+    const worktreePath = resolve(values.worktree);
+    const rollup = await computeWorktreeCost(worktreePath, options);
+    if (values.json === true) {
+      if (withPricing) attachPricingToRollup(rollup);
+      console.log(JSON.stringify(rollup, null, 2));
+      return;
+    }
+    printRollup(rollup, false, withPricing);
+    return;
+  }
 
   const command = positionals[0];
 
@@ -97,7 +116,6 @@ async function main() {
 
   // Default: treat positionals as issue identifiers (and/or inclusive ranges
   // like EPAC-1990-1999) and produce the appropriate rollup.
-  const withPricing = values['no-pricing'] !== true;
   const fromUsage = values['from-usage'];
 
   let expanded;
@@ -162,6 +180,7 @@ function attachPricingToRollup(rollup) {
 function printUsage() {
   console.log(`Usage: llm-cost <ISSUE-ID>... [options]
        llm-cost <PREFIX-START-END>... [options]    (range, e.g. EPAC-1990-1999)
+       llm-cost --worktree <path>                  (any directory, no issue ID needed)
        llm-cost <ISSUE-ID> --from-usage <usage.jsonl-or-dir>
        llm-cost list
        llm-cost backfill --out <usage.jsonl-path>
@@ -176,6 +195,9 @@ Sources:
   you've backfilled and deleted the transcripts.
 
 Options:
+  --worktree <path>       Show cost for all sessions run from this directory.
+                          No issue ID or Symphony convention required — just
+                          point it at the worktree the agent ran in.
   --cwd-pattern <regex>   Regex matching the cwd, with one capture group for the
                           issue identifier. Default matches Symphony's
                           \`<workspace.root>/<ISSUE-ID>\` convention (spec default
@@ -198,6 +220,7 @@ Examples:
   llm-cost EPAC-1940 --json | jq .providerTotals.codex.quotaSamples
   llm-cost list | grep EPAC
   llm-cost EPAC-1940 --cwd-pattern '/issues/([A-Z]+-\\d+)$'
+  llm-cost --worktree ~/code/my-repo/.worktrees/my-feature
 
   # Bake every transcript on this machine into a usage.jsonl, then it's safe
   # to rm -rf ~/.claude/projects and ~/.codex/sessions.

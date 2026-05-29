@@ -6,7 +6,7 @@
  * (bin/llm-cost.mjs).
  */
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { rollupSessions } from './aggregator.mjs';
 import { DEFAULT_CWD_PATTERN, issueFromClaudeProjectDirName, issueFromCwd } from './issue-pattern.mjs';
 import { findClaudeProjectDirs, listJsonlsRecursively, parseClaudeSession } from './transcripts/claude.mjs';
@@ -82,6 +82,42 @@ export async function computeIssueCost(issueIdentifier, options = {}) {
   }
 
   return rollupSessions(issueIdentifier, sessions);
+}
+
+/**
+ * Compute token/turn cost for all sessions run from a specific worktree
+ * directory, regardless of any issue identifier or Symphony convention.
+ * Works with any directory a user ran `claude` or `codex` from — no Linear
+ * issue or symphonyd required.
+ *
+ * @param {string} worktreePath  Absolute path to the worktree directory.
+ * @param {object} [options]
+ * @param {string} [options.claudeProjectsDir]  Override `~/.claude/projects`.
+ * @param {string} [options.codexSessionsDir]   Override `~/.codex/sessions`.
+ */
+export async function computeWorktreeCost(worktreePath, options = {}) {
+  const claudeRootDir = options.claudeProjectsDir ?? join(homedir(), '.claude', 'projects');
+  const codexRootDir = options.codexSessionsDir ?? join(homedir(), '.codex', 'sessions');
+
+  const sessions = [];
+
+  // Claude: the project directory name is the absolute cwd with every `/` and
+  // `.` replaced by `-`. Look it up directly — no regex needed.
+  const encodedPath = worktreePath.replace(/[/.]/g, '-');
+  const claudeProjectDir = join(claudeRootDir, encodedPath);
+  for (const file of await listJsonlsRecursively(claudeProjectDir)) {
+    const session = await parseClaudeSession(file);
+    if (session !== null) sessions.push(session);
+  }
+
+  // Codex: scan all rollouts, keep those whose session_meta.cwd matches exactly.
+  for (const file of await listCodexRollouts(codexRootDir)) {
+    const session = await parseCodexSession(file);
+    if (session === null) continue;
+    if (session.cwd === worktreePath) sessions.push(session);
+  }
+
+  return rollupSessions(basename(worktreePath), sessions);
 }
 
 /**
