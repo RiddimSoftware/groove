@@ -4,7 +4,7 @@
   "description": "Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no telemetry pipeline required.",
   "type": "module",
   "bin": {
-    "llm-cost": "./bin/llm-cost.mjs"
+    "llm-cost": "bin/llm-cost.mjs"
   },
   "main": "./src/index.mjs",
   "files": [
@@ -14,7 +14,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test 'test/**/*.test.mjs'"
+    "test": "node --test"
   },
   "keywords": [
     "claude",
@@ -35,7 +35,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/RiddimSoftware/groove.git",
+    "url": "git+https://github.com/RiddimSoftware/groove.git",
     "directory": "packages/llm-cost-attribution"
   }
 }
