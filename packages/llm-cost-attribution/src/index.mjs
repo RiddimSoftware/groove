@@ -10,7 +10,7 @@ import { basename, join } from 'node:path';
 import { rollupSessions } from './aggregator.mjs';
 import { DEFAULT_CWD_PATTERN, issueFromClaudeProjectDirName, issueFromCwd } from './issue-pattern.mjs';
 import { findClaudeProjectDirs, listJsonlsRecursively, parseClaudeSession } from './transcripts/claude.mjs';
-import { listCodexRollouts, parseCodexSession } from './transcripts/codex.mjs';
+import { listCodexRollouts, parseCodexSession, peekCodexCwd } from './transcripts/codex.mjs';
 import { sessionToUsageRecords } from './transcript-to-usage.mjs';
 import { appendUsageRecords, readUsageRecords, validateUsageRecord } from './usage-jsonl.mjs';
 import { rollupUsageRecords } from './usage-aggregator.mjs';
@@ -75,14 +75,19 @@ export async function computeIssueCost(issueIdentifier, options = {}) {
     }
   }
 
-  // Codex: session_meta.cwd match, scanned across all rollouts.
+  // Codex: parallel peek to read only the first line of each rollout (where
+  // session_meta lives), filter to matches, then full-parse matches only.
   const codexFiles = await listCodexRollouts(codexRootDir);
+  let peeked = 0;
+  const cwds = await pooledMap(codexFiles, async (file) => {
+    const cwd = await peekCodexCwd(file);
+    onProgress({ phase: 'codex', processed: ++peeked, total: codexFiles.length });
+    return cwd;
+  });
   for (let i = 0; i < codexFiles.length; i++) {
+    if (cwds[i] === null || issueFromCwd(cwds[i], cwdPattern) !== issueIdentifier) continue;
     const session = await parseCodexSession(codexFiles[i]);
-    if (session !== null && issueFromCwd(session.cwd, cwdPattern) === issueIdentifier) {
-      sessions.push(session);
-    }
-    onProgress({ phase: 'codex', processed: i + 1, total: codexFiles.length });
+    if (session !== null) sessions.push(session);
   }
 
   return rollupSessions(issueIdentifier, sessions);
@@ -117,12 +122,19 @@ export async function computeWorktreeCost(worktreePath, options = {}) {
     onProgress({ phase: 'claude', processed: i + 1, total: claudeFiles.length });
   }
 
-  // Codex: scan all rollouts, keep those whose session_meta.cwd matches exactly.
+  // Codex: parallel peek to read only the first line of each rollout (where
+  // session_meta lives), filter to matches, then full-parse matches only.
   const codexFiles = await listCodexRollouts(codexRootDir);
+  let peeked = 0;
+  const cwds = await pooledMap(codexFiles, async (file) => {
+    const cwd = await peekCodexCwd(file);
+    onProgress({ phase: 'codex', processed: ++peeked, total: codexFiles.length });
+    return cwd;
+  });
   for (let i = 0; i < codexFiles.length; i++) {
+    if (cwds[i] !== worktreePath) continue;
     const session = await parseCodexSession(codexFiles[i]);
-    if (session !== null && session.cwd === worktreePath) sessions.push(session);
-    onProgress({ phase: 'codex', processed: i + 1, total: codexFiles.length });
+    if (session !== null) sessions.push(session);
   }
 
   return rollupSessions(basename(worktreePath), sessions);
@@ -248,4 +260,31 @@ export async function listKnownIssues(options = {}) {
   }
 
   return [...ids].sort();
+}
+
+/**
+ * Run an async function over every item in an array with at most `concurrency`
+ * calls in flight at once. Returns results in the same order as the input.
+ *
+ * Uses a work-stealing pattern so no slot sits idle waiting for a slow batch.
+ *
+ * @template T, R
+ * @param {T[]} items
+ * @param {(item: T) => Promise<R>} fn
+ * @param {number} [concurrency=32]
+ * @returns {Promise<R[]>}
+ */
+async function pooledMap(items, fn, concurrency = 32) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, worker),
+  );
+  return results;
 }

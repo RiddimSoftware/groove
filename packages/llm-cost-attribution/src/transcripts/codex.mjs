@@ -11,7 +11,9 @@
  * We delta the cumulative usage to produce per-turn token counts, and
  * collect every rate-limits sample we see.
  */
+import { createReadStream } from 'node:fs';
 import { readdir } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { numericOrZero, pathExists, readJsonl } from '../util.mjs';
 
@@ -35,6 +37,54 @@ export async function listCodexRollouts(codexRootDir) {
   }
   await walk(codexRootDir);
   return out;
+}
+
+/**
+ * Read the first line of a Codex rollout file and return the session's cwd,
+ * or null if the first record isn't a session_meta or the file can't be read.
+ *
+ * Used for fast pre-filtering: peeking 4 KB is orders of magnitude cheaper
+ * than parsing the full JSONL when only a fraction of sessions will match.
+ */
+/**
+ * Read the first line of a Codex rollout file and return the session's cwd,
+ * or null if the first record isn't a session_meta or the file can't be read.
+ *
+ * Note: session_meta lines are typically ~22 KB (base_instructions included),
+ * so a fixed-size buffer won't work — readline handles any line length and
+ * closes the stream immediately after the first line.
+ */
+export function peekCodexCwd(file) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      resolve(val);
+    };
+    try {
+      const stream = createReadStream(file);
+      const rl = createInterface({ input: stream, crlfDelay: Infinity });
+      rl.once('line', (line) => {
+        // Resolve BEFORE closing: rl.close() emits 'close' synchronously,
+        // which would otherwise call finish(null) before we get here.
+        let cwd = null;
+        try {
+          const rec = JSON.parse(line);
+          if (rec?.type === 'session_meta' && typeof rec?.payload?.cwd === 'string') {
+            cwd = rec.payload.cwd;
+          }
+        } catch {}
+        finish(cwd);
+        rl.close();
+        stream.destroy();
+      });
+      rl.once('close', () => finish(null));
+      stream.once('error', () => finish(null));
+    } catch {
+      finish(null);
+    }
+  });
 }
 
 export async function parseCodexSession(file) {
