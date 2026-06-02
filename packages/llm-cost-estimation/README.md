@@ -6,6 +6,10 @@
 
 This package is a sibling of [`llm-cost-attribution`](../llm-cost-attribution), which measures actual cost after work completes. `llm-cost-estimation` forecasts cost *before* work starts, using historical calibration data and story-point estimates.
 
+## Architecture
+
+See [docs/use-cases.md](docs/use-cases.md) for the use-case catalog — ports, adapters, and boundary rules for each behavior.
+
 ## Planned API
 
 ```js
