@@ -3,7 +3,7 @@ import { empiricalP50P80 } from './quantiles.mjs';
 export const DEFAULT_MIN_FORECAST_SAMPLE_SIZE = 5;
 
 /**
- * Forecast per-issue token and turn cost for a `{ size, model }` cell.
+ * Forecast per-issue cost for a `{ size, model }` cell.
  *
  * The source is an iterable port: pass an Array, async generator, or an object
  * with `records()` / `iterate()` returning either. The function intentionally
@@ -12,19 +12,49 @@ export const DEFAULT_MIN_FORECAST_SAMPLE_SIZE = 5;
  * v0 conditions only on `{ size, model }`. Unknown feature keys are accepted
  * and ignored so the conditioning record can grow later.
  *
+ * Output channels:
+ *   - `tokens` and `turns` — empirical P50/P80 of total tokens and turn counts.
+ *   - `dollars` — empirical P50/P80 of API-equivalent USD, derived per issue
+ *     from the aggregated token breakdown via the injected `pricingTable`
+ *     port. Always returned; `n: 0` when the port is absent or returns null
+ *     for every issue (e.g. model not in the rate table).
+ *   - `quota` — empirical P50/P80 of the Codex plan-utilization fraction, one
+ *     value per issue, via the injected `quotaModel` port. Single-issue only:
+ *     never sum across issues (a project-level rollup would lie because plan
+ *     quotas are window-scoped). `null` with a top-level `quotaReason` when
+ *     no port is provided or no issue has a usable quota sample.
+ *
  * @param {{ size: unknown, model: unknown, [key: string]: unknown }} featureRecord
  * @param {Iterable<object> | AsyncIterable<object> | { records?: unknown, iterate?: unknown }} [usageSource]
- * @param {{ minSampleSize?: number }} [options]
+ * @param {{
+ *   minSampleSize?: number,
+ *   pricingTable?: { priceFor: (model: string, buckets: TokenBuckets) => number | null },
+ *   quotaModel?: { quotaFractionFor: (record: object) => number | null }
+ * }} [options]
  * @returns {Promise<{
  *   tokens: { p50: number | null, p80: number | null, n: number },
  *   turns: { p50: number | null, p80: number | null, n: number },
+ *   dollars: { p50: number | null, p80: number | null, n: number },
+ *   quota: { p50: number | null, p80: number | null, n: number } | null,
+ *   quotaReason?: string,
  *   lowConfidence: boolean,
  *   empty: boolean
  * }>}
+ *
+ * @typedef {{
+ *   inputUncached: number,
+ *   inputCached: number,
+ *   cacheCreate5m: number,
+ *   cacheCreate1h: number,
+ *   outputVisible: number,
+ *   outputReasoning: number,
+ * }} TokenBuckets
  */
 export async function forecastIssueCost(featureRecord, usageSource = [], options = {}) {
   const feature = normalizeFeatureRecord(featureRecord);
   const minSampleSize = normalizeMinSampleSize(options.minSampleSize);
+  const pricingTable = options.pricingTable ?? null;
+  const quotaModel = options.quotaModel ?? null;
   const perIssue = new Map();
 
   for await (const record of iterateEstimateTaggedUsageSource(usageSource)) {
@@ -38,22 +68,44 @@ export async function forecastIssueCost(featureRecord, usageSource = [], options
 
     let aggregate = perIssue.get(issueIdentifier);
     if (aggregate === undefined) {
-      aggregate = { tokens: 0, turns: 0 };
+      aggregate = {
+        tokens: 0,
+        turns: 0,
+        buckets: emptyBuckets(),
+        quotaFractionMax: null,
+      };
       perIssue.set(issueIdentifier, aggregate);
     }
     aggregate.tokens += totalTokens;
     aggregate.turns += 1;
+    addBuckets(aggregate.buckets, tokenBucketsFor(record));
+
+    if (quotaModel !== null) {
+      const fraction = quotaModel.quotaFractionFor(record);
+      if (typeof fraction === 'number' && Number.isFinite(fraction)) {
+        if (aggregate.quotaFractionMax === null || fraction > aggregate.quotaFractionMax) {
+          aggregate.quotaFractionMax = fraction;
+        }
+      }
+    }
   }
 
   const issueCosts = [...perIssue.values()];
   const n = issueCosts.length;
 
-  return {
+  const dollars = dollarsForecast(issueCosts, feature.model, pricingTable);
+  const { quota, reason: quotaReason } = quotaForecast(issueCosts, quotaModel);
+
+  const result = {
     tokens: costForecast(issueCosts.map((cost) => cost.tokens), n),
     turns: costForecast(issueCosts.map((cost) => cost.turns), n),
+    dollars,
+    quota,
     lowConfidence: n < minSampleSize,
     empty: n === 0,
   };
+  if (quota === null) result.quotaReason = quotaReason;
+  return result;
 }
 
 /**
@@ -101,6 +153,107 @@ function costForecast(values, n) {
     p80: quantiles.p80,
     n,
   };
+}
+
+/**
+ * @param {{ buckets: TokenBuckets }[]} issueCosts
+ * @param {string} model
+ * @param {{ priceFor: (model: string, buckets: TokenBuckets) => number | null } | null} pricingTable
+ */
+function dollarsForecast(issueCosts, model, pricingTable) {
+  if (pricingTable === null || typeof pricingTable.priceFor !== 'function') {
+    return { p50: null, p80: null, n: 0 };
+  }
+  const values = [];
+  for (const cost of issueCosts) {
+    const usd = pricingTable.priceFor(model, cost.buckets);
+    if (typeof usd === 'number' && Number.isFinite(usd)) values.push(usd);
+  }
+  return costForecast(values, values.length);
+}
+
+/**
+ * @param {{ quotaFractionMax: number | null }[]} issueCosts
+ * @param {{ quotaFractionFor: (record: object) => number | null } | null} quotaModel
+ */
+function quotaForecast(issueCosts, quotaModel) {
+  if (quotaModel === null || typeof quotaModel.quotaFractionFor !== 'function') {
+    return { quota: null, reason: 'no quota model' };
+  }
+  const values = [];
+  for (const cost of issueCosts) {
+    if (cost.quotaFractionMax !== null) values.push(cost.quotaFractionMax);
+  }
+  if (values.length === 0) {
+    return { quota: null, reason: 'no quota samples' };
+  }
+  const quantiles = empiricalP50P80(values);
+  return { quota: { p50: quantiles.p50, p80: quantiles.p80, n: values.length }, reason: null };
+}
+
+function emptyBuckets() {
+  return {
+    inputUncached: 0,
+    inputCached: 0,
+    cacheCreate5m: 0,
+    cacheCreate1h: 0,
+    outputVisible: 0,
+    outputReasoning: 0,
+  };
+}
+
+/**
+ * @param {TokenBuckets} target
+ * @param {TokenBuckets} delta
+ */
+function addBuckets(target, delta) {
+  target.inputUncached += delta.inputUncached;
+  target.inputCached += delta.inputCached;
+  target.cacheCreate5m += delta.cacheCreate5m;
+  target.cacheCreate1h += delta.cacheCreate1h;
+  target.outputVisible += delta.outputVisible;
+  target.outputReasoning += delta.outputReasoning;
+}
+
+/**
+ * Extract a TokenBuckets-shaped breakdown from a usage record. Falls back to
+ * crediting the bare `inputTokens` / `outputTokens` totals to `inputUncached`
+ * and `outputVisible` so older or stripped records still produce a defensible
+ * (if pessimistic) $ estimate.
+ *
+ * @param {unknown} record
+ * @returns {TokenBuckets}
+ */
+function tokenBucketsFor(record) {
+  const r = /** @type {Record<string, unknown>} */ (record);
+  const inputUncached = nonNegativeNumber(r.inputUncachedTokens);
+  const inputCached = nonNegativeNumber(r.inputCachedReadTokens);
+  const cacheCreate5m = nonNegativeNumber(r.inputCacheWriteEphemeral5mTokens);
+  const cacheCreate1h = nonNegativeNumber(r.inputCacheWriteEphemeral1hTokens);
+  const outputVisible = nonNegativeNumber(r.outputVisibleTokens);
+  const outputReasoning = nonNegativeNumber(r.outputReasoningTokens);
+
+  const hasInputBreakdown =
+    typeof r.inputUncachedTokens === 'number' ||
+    typeof r.inputCachedReadTokens === 'number' ||
+    typeof r.inputCacheWriteEphemeral5mTokens === 'number' ||
+    typeof r.inputCacheWriteEphemeral1hTokens === 'number';
+  const hasOutputBreakdown =
+    typeof r.outputVisibleTokens === 'number' ||
+    typeof r.outputReasoningTokens === 'number';
+
+  return {
+    inputUncached: hasInputBreakdown ? inputUncached : nonNegativeNumber(r.inputTokens),
+    inputCached: hasInputBreakdown ? inputCached : 0,
+    cacheCreate5m: hasInputBreakdown ? cacheCreate5m : 0,
+    cacheCreate1h: hasInputBreakdown ? cacheCreate1h : 0,
+    outputVisible: hasOutputBreakdown ? outputVisible : nonNegativeNumber(r.outputTokens),
+    outputReasoning: hasOutputBreakdown ? outputReasoning : 0,
+  };
+}
+
+function nonNegativeNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 /**
