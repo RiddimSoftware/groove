@@ -25,7 +25,10 @@ export { sessionToUsageRecords } from './transcript-to-usage.mjs';
 export {
   DEFAULT_MIN_FORECAST_SAMPLE_SIZE,
   collectCellSamples,
+  featureCellOf,
+  issueIdentifierFor,
   iterateEstimateTaggedUsageSource,
+  totalTokensFor,
 } from './forecast.mjs';
 export {
   DEFAULT_PROJECT_FORECAST_ITERATIONS,
@@ -33,6 +36,19 @@ export {
   forecastProjectCost,
 } from './project-forecast.mjs';
 export { empiricalP50P80, empiricalQuantile } from './quantiles.mjs';
+export {
+  DEFAULT_CALIBRATION_QUANTILE,
+  DEFAULT_DEVIATION_THRESHOLD,
+  DEFAULT_HOLDOUT_FRACTION,
+  calibrateCoverage,
+} from './calibrate.mjs';
+export {
+  logNormalParamsForP50P80,
+  mulberry32,
+  standardNormal,
+  syntheticRecord,
+  syntheticUsageRecords,
+} from './synthetic.mjs';
 export {
   SCHEMA_VERSION,
   findUsageFiles,

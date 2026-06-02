@@ -104,6 +104,7 @@ llm-cost <ISSUE-ID> [options]
 llm-cost <ISSUE-ID> --from-usage <usage.jsonl-or-dir>
 llm-cost list
 llm-cost backfill --out <usage.jsonl-path>
+llm-cost calibrate <usage.jsonl-or-dir> [--seed N] [--holdout F]
 llm-cost --help
 
 Options:
@@ -116,6 +117,11 @@ Options:
                           files instead of the CLI transcripts. See "Delete transcripts,
                           keep cost history" below.
   --out <path>            (backfill only) Destination usage.jsonl path. Appended.
+  --seed <int>            (calibrate only) Seed for the deterministic held-out split. Default 1.
+  --holdout <0..1>        (calibrate only) Fraction of each cell's issues held out. Default 0.2.
+  --quantile <0..1>       (calibrate only) Quantile band to test. Default 0.8 (P80).
+  --threshold <0..1>      (calibrate only) Flag a cell when coverage drifts from the
+                          target by more than this. Default 0.1 (10 points).
   --json                  Emit JSON instead of a table.
   -h, --help              Print help.
 ```
@@ -145,6 +151,43 @@ Real-world numbers from a working factory:
 The backfill is lossless for everything the cost analysis cares about — including the Codex per-window quota readout, the Claude cache-tier split (5m vs 1h), and the Codex reasoning-vs-visible output split. Token grand totals, turn counts, models, timestamps, and workspace-path provenance are preserved exactly. The bake file can also be checked into a private repo, shipped to a billing host, or queried from CI without access to the machine that produced the agent sessions.
 
 This whole flow is a built-in feature of the package — you don't need to know anything about the file format to use it. As a side benefit: the format follows the [Symphony Coding-Agent Cost Telemetry Extension spec](https://github.com/RiddimSoftware/groove/blob/main/specs/symphony-cost-telemetry-extension/SPEC.md), so any other tool that conforms can read or write the same file (e.g. a Symphony-spec-conformant orchestrator can emit `usage.jsonl` directly during runs, skipping the bake step entirely). That interop is purely optional; the package works exactly the same whether you care about the spec or not.
+
+## Is the P80 actually a P80? (`calibrate`)
+
+A forecast nobody checked is a horoscope. `forecastIssueCost` hands back a P80
+band per `{ size, model }` cell — but "P80" only means something if, on issues
+the forecaster *didn't* see, the actual cost lands at or below that band about
+80% of the time. `llm-cost calibrate` measures exactly that on a local dataset:
+
+```bash
+# Backtest the forecaster's P80 against a local, estimate-tagged usage.jsonl
+# (e.g. an enriched backfill). The input never leaves your machine.
+llm-cost calibrate ~/backfill.out --seed 1 --holdout 0.2
+```
+
+It groups the dataset into `{ size, model }` cells, deterministically holds out
+a fraction of each cell's issues (reproducible under `--seed`), fits the
+forecaster on the rest, and reports — per cell and overall — the empirical
+fraction of held-out actuals at or below the predicted P80. Cells whose coverage
+drifts from 80% by more than `--threshold` (default 10 points) are flagged ⚠,
+so an over- or under-confident band is impossible to miss:
+
+```
+Cell                   Train  Holdout   Pred P80  Coverage  Flag
+────────────────────────────────────────────────────────────────────────
+L / sonnet               240       60      12.0K       79%
+M / opus                  40       10       1.0K      100%  ⚠ FLAG
+────────────────────────────────────────────────────────────────────────
+OVERALL                           110                  84%
+```
+
+**Privacy.** `calibrate` is a read-only, local command: the input is never
+written back and never committed. Point it at a gitignored file such as
+`backfill.out` (already in this repo's `.gitignore`); the leak-safety guard and
+`.gitignore` keep real telemetry out of any commit. Pass `--json` for the raw
+report. The committed tests use only synthetic fixtures drawn from a known
+distribution — see `test/forecast-recovers-known-dist.test.mjs`, which proves
+the forecaster recovers a distribution whose P50/P80 it was handed.
 
 ## Library
 

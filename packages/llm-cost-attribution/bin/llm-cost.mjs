@@ -21,10 +21,13 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   backfillUsageFromTranscripts,
+  calibrateCoverage,
   computeIssueCost,
   computeIssueCostFromUsage,
   computeWorktreeCost,
   listKnownIssues,
+  readUsageRecords,
+  validateUsageRecord,
 } from '../src/index.mjs';
 import { DEFAULT_CWD_PATTERN } from '../src/issue-pattern.mjs';
 import { computeMultiIssueRollup, expandAllIssueArgs } from '../src/multi-issue.mjs';
@@ -47,6 +50,10 @@ async function main() {
       'no-pricing': { type: 'boolean' },
       worktree: { type: 'string' },
       out: { type: 'string' },
+      seed: { type: 'string' },
+      holdout: { type: 'string' },
+      quantile: { type: 'string' },
+      threshold: { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -102,6 +109,44 @@ async function main() {
       `Wrote ${result.recordsWritten} usage records from ${result.sessionsProcessed} sessions ` +
       `(${result.sessionsSkipped} sessions skipped).\n`,
     );
+    return;
+  }
+
+  // `llm-cost calibrate <path>` backtests the forecaster's P80 band against a
+  // local estimate-tagged usage.jsonl and prints an empirical coverage report.
+  // The input is read locally only — never written back, never committed.
+  if (command === 'calibrate') {
+    const inputPath = positionals[1];
+    if (inputPath === undefined || inputPath === '') {
+      console.error('error: calibrate requires a path to a usage.jsonl file or directory');
+      process.exit(1);
+    }
+    const calOptions = {};
+    if (values.seed !== undefined) calOptions.seed = parseIntOption(values.seed, 'seed');
+    if (values.holdout !== undefined) calOptions.holdoutFraction = parseFloatOption(values.holdout, 'holdout');
+    if (values.quantile !== undefined) calOptions.quantile = parseFloatOption(values.quantile, 'quantile');
+    if (values.threshold !== undefined) calOptions.deviationThreshold = parseFloatOption(values.threshold, 'threshold');
+
+    const records = [];
+    let invalidLines = 0;
+    for await (const rec of readUsageRecords(inputPath)) {
+      if (validateUsageRecord(rec) === null) records.push(rec);
+      else invalidLines += 1;
+    }
+
+    let report;
+    try {
+      report = await calibrateCoverage(records, calOptions);
+    } catch (err) {
+      console.error(`error: ${err.message}`);
+      process.exit(1);
+    }
+
+    if (values.json === true) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    printCalibrationReport(report, inputPath, invalidLines);
     return;
   }
 
@@ -161,6 +206,100 @@ async function main() {
   printMultiIssueRollup(multi, fromUsage !== undefined, withPricing);
 }
 
+/** Parse a CLI integer option, exiting with a clear error on bad input. */
+function parseIntOption(raw, name) {
+  const n = Number(raw);
+  if (!Number.isInteger(n)) {
+    console.error(`error: --${name} must be an integer (got "${raw}")`);
+    process.exit(1);
+  }
+  return n;
+}
+
+/** Parse a CLI float option, exiting with a clear error on bad input. */
+function parseFloatOption(raw, name) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    console.error(`error: --${name} must be a number (got "${raw}")`);
+    process.exit(1);
+  }
+  return n;
+}
+
+/**
+ * Print the calibration coverage report: per-cell and overall empirical
+ * coverage of the predicted P80 band, with flags for cells that drift from the
+ * target by more than the threshold. Low-confidence cells (too few train/held-out
+ * issues) are shown but never flagged.
+ */
+function printCalibrationReport(report, inputPath, invalidLines = 0) {
+  const pct = (q) => (q == null ? '   —' : `${(q * 100).toFixed(0)}%`);
+  const targetPct = (report.quantile * 100).toFixed(0);
+  const thresholdPp = (report.deviationThreshold * 100).toFixed(0);
+
+  console.log(HEAD);
+  console.log(`CALIBRATION COVERAGE  —  ${inputPath}`);
+  console.log(HEAD);
+  console.log(
+    `Target band: P${targetPct}   Held-out: ${(report.holdoutFraction * 100).toFixed(0)}%   ` +
+    `Seed: ${report.seed}   Flag threshold: ±${thresholdPp}pp`,
+  );
+  console.log(
+    `Records: ${formatNumber(report.overall.recordsTotal)} read, ` +
+    `${formatNumber(report.overall.recordsSkipped)} skipped (no cell / unavailable)` +
+    (invalidLines > 0 ? `, ${formatNumber(invalidLines)} invalid` : ''),
+  );
+  console.log(`Issues: ${formatNumber(report.overall.issuesTotal)} across ${report.overall.cellsTotal} cell${report.overall.cellsTotal === 1 ? '' : 's'}`);
+  console.log();
+
+  if (report.cells.length === 0) {
+    console.log('No forecastable cells found — need records tagged with size (or estimate) and model.');
+    return;
+  }
+
+  const cellLabel = (c) => `${c.cell.size} / ${c.cell.model}${c.lowConfidence ? '  (low conf)' : ''}`;
+  const labelWidth = Math.max(20, ...report.cells.map((c) => cellLabel(c).length));
+
+  console.log(
+    padRight('Cell', labelWidth) +
+    '  ' + padLeft('Train', 6) +
+    '  ' + padLeft('Holdout', 7) +
+    '  ' + padLeft(`Pred P${targetPct}`, 9) +
+    '  ' + padLeft('Coverage', 8) +
+    '  Flag',
+  );
+  console.log(SEP);
+  for (const c of report.cells) {
+    console.log(
+      padRight(cellLabel(c), labelWidth) +
+      '  ' + padLeft(formatNumber(c.trainN), 6) +
+      '  ' + padLeft(formatNumber(c.holdoutN), 7) +
+      '  ' + padLeft(c.predictedP80 == null ? '—' : formatTokensCompact(c.predictedP80), 9) +
+      '  ' + padLeft(pct(c.coverage), 8) +
+      '  ' + (c.flagged ? '⚠ FLAG' : ''),
+    );
+  }
+  console.log(SEP);
+  console.log(
+    padRight('OVERALL', labelWidth) +
+    '  ' + padLeft('', 6) +
+    '  ' + padLeft(formatNumber(report.overall.holdoutN), 7) +
+    '  ' + padLeft('', 9) +
+    '  ' + padLeft(pct(report.overall.coverage), 8) +
+    '  ' + (report.overall.flagged ? '⚠ FLAG' : ''),
+  );
+
+  const flagged = report.cells.filter((c) => c.flagged);
+  console.log();
+  if (flagged.length === 0) {
+    console.log(`✓ No cells deviate from P${targetPct} coverage by more than ${thresholdPp} points.`);
+  } else {
+    console.log(`⚠  ${flagged.length} cell${flagged.length === 1 ? '' : 's'} off target by >${thresholdPp}pp: ${flagged.map((c) => `${c.cell.size} / ${c.cell.model}`).join(', ')}`);
+  }
+  console.log();
+  console.log('Note: the input is read locally only — never written back or committed. Keep it gitignored.');
+}
+
 /**
  * Returns an onProgress callback that writes a live scan counter to stderr,
  * overwriting the same line each tick. Clears the line when the Codex phase
@@ -202,6 +341,7 @@ function printUsage() {
        llm-cost <ISSUE-ID> --from-usage <usage.jsonl-or-dir>
        llm-cost list
        llm-cost backfill --out <usage.jsonl-path>
+       llm-cost calibrate <usage.jsonl-or-dir> [--seed N] [--holdout F]
        llm-cost --help
 
 Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions.
@@ -227,6 +367,13 @@ Options:
                           \`usage*.jsonl\` files (per the cost-telemetry spec)
                           instead of from the CLI transcripts.
   --out <path>            (backfill only) Destination usage.jsonl path. Appended.
+  --seed <int>            (calibrate only) Seed for the deterministic held-out
+                          split. Default 1.
+  --holdout <0..1>        (calibrate only) Fraction of each cell's issues to hold
+                          out for backtesting. Default 0.2.
+  --quantile <0..1>       (calibrate only) Quantile band to test. Default 0.8 (P80).
+  --threshold <0..1>      (calibrate only) Flag a cell when coverage drifts from
+                          the target by more than this. Default 0.1 (10 points).
   --json                  Emit machine-readable JSON instead of the table.
   -h, --help              Print this message.
 
@@ -244,6 +391,10 @@ Examples:
   # to rm -rf ~/.claude/projects and ~/.codex/sessions.
   llm-cost backfill --out ~/llm-cost-history.jsonl
   llm-cost EPAC-1940 --from-usage ~/llm-cost-history.jsonl
+
+  # Check whether the forecaster's P80 band is actually calibrated against a
+  # local, estimate-tagged dataset. The input stays local — never committed.
+  llm-cost calibrate ~/backfill.out --seed 1 --holdout 0.2
 `);
 }
 
