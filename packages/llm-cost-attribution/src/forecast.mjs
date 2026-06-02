@@ -55,6 +55,47 @@ export async function forecastIssueCost(featureRecord, usageSource = [], options
   const minSampleSize = normalizeMinSampleSize(options.minSampleSize);
   const pricingTable = options.pricingTable ?? null;
   const quotaModel = options.quotaModel ?? null;
+
+  const issueCosts = await collectCellSamples(featureRecord, usageSource, { quotaModel });
+  const n = issueCosts.length;
+
+  const dollars = dollarsForecast(issueCosts, feature.model, pricingTable);
+  const { quota, reason: quotaReason } = quotaForecast(issueCosts, quotaModel);
+
+  const result = {
+    tokens: costForecast(issueCosts.map((cost) => cost.tokens), n),
+    turns: costForecast(issueCosts.map((cost) => cost.turns), n),
+    dollars,
+    quota,
+    lowConfidence: n < minSampleSize,
+    empty: n === 0,
+  };
+  if (quota === null) result.quotaReason = quotaReason;
+  return result;
+}
+
+/**
+ * The per-cell sampler that `forecastIssueCost` reads. Returns the empirical
+ * per-issue cost observations for a `{ size, model }` cell: one entry per
+ * distinct historical issue, with that issue's turns and token buckets rolled
+ * up to issue-level totals. This is the distribution interface project-level
+ * forecasters consume: they draw from these observed per-issue costs rather
+ * than refitting a parametric model or re-walking raw records themselves.
+ *
+ * Each observation carries `tokens` and `turns` (the channels `forecastIssueCost`
+ * forecasts) plus the aggregated `buckets` breakdown, so a caller holding a
+ * `PricingTable` port can derive a dollar cost per observed issue. When a
+ * `quotaModel` is supplied the per-issue peak quota fraction is captured too;
+ * quota is single-issue only, so project-level callers ignore it.
+ *
+ * @param {{ size: unknown, model: unknown, [key: string]: unknown }} featureRecord
+ * @param {Iterable<object> | AsyncIterable<object> | { records?: unknown, iterate?: unknown }} [usageSource]
+ * @param {{ quotaModel?: { quotaFractionFor: (record: object) => number | null } }} [options]
+ * @returns {Promise<Array<{ tokens: number, turns: number, buckets: TokenBuckets, quotaFractionMax: number | null }>>}
+ */
+export async function collectCellSamples(featureRecord, usageSource = [], options = {}) {
+  const feature = normalizeFeatureRecord(featureRecord);
+  const quotaModel = options.quotaModel ?? null;
   const perIssue = new Map();
 
   for await (const record of iterateEstimateTaggedUsageSource(usageSource)) {
@@ -90,22 +131,7 @@ export async function forecastIssueCost(featureRecord, usageSource = [], options
     }
   }
 
-  const issueCosts = [...perIssue.values()];
-  const n = issueCosts.length;
-
-  const dollars = dollarsForecast(issueCosts, feature.model, pricingTable);
-  const { quota, reason: quotaReason } = quotaForecast(issueCosts, quotaModel);
-
-  const result = {
-    tokens: costForecast(issueCosts.map((cost) => cost.tokens), n),
-    turns: costForecast(issueCosts.map((cost) => cost.turns), n),
-    dollars,
-    quota,
-    lowConfidence: n < minSampleSize,
-    empty: n === 0,
-  };
-  if (quota === null) result.quotaReason = quotaReason;
-  return result;
+  return [...perIssue.values()];
 }
 
 /**

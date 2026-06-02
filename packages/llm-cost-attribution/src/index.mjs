@@ -24,8 +24,14 @@ export { rollupUsageRecords } from './usage-aggregator.mjs';
 export { sessionToUsageRecords } from './transcript-to-usage.mjs';
 export {
   DEFAULT_MIN_FORECAST_SAMPLE_SIZE,
+  collectCellSamples,
   iterateEstimateTaggedUsageSource,
 } from './forecast.mjs';
+export {
+  DEFAULT_PROJECT_FORECAST_ITERATIONS,
+  DEFAULT_PROJECT_FORECAST_SEED,
+  forecastProjectCost,
+} from './project-forecast.mjs';
 export { empiricalP50P80, empiricalQuantile } from './quantiles.mjs';
 export {
   SCHEMA_VERSION,
