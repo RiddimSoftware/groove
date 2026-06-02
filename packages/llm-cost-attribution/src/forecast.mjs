@@ -143,12 +143,31 @@ function normalizeMinSampleSize(value) {
  * @param {{ size: string, model: string }} feature
  */
 function matchesForecastCell(record, feature) {
-  if (record === null || typeof record !== 'object' || Array.isArray(record)) return false;
+  const { size, model } = featureCellOf(record);
+  return size === feature.size && model === feature.model;
+}
+
+/**
+ * Extract the `{ size, model }` forecast cell a usage record belongs to, using
+ * the same precedence the forecaster matches on: `size` (falling back to a
+ * nested feature record's `size`, then the spec's `estimate` tag) and `model`
+ * (falling back to a nested feature record's `model`). Either field is `null`
+ * when absent, so the record belongs to no cell. Shared with `calibrate.mjs`
+ * so the backtest interprets records identically to the forecaster.
+ *
+ * @param {unknown} record
+ * @returns {{ size: string | null, model: string | null }}
+ */
+export function featureCellOf(record) {
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+    return { size: null, model: null };
+  }
   const r = /** @type {Record<string, unknown>} */ (record);
   const nested = nestedFeatureRecord(r);
-  const size = cellKey(firstPresent(r.size, nested?.size, r.estimate));
-  const model = cellKey(firstPresent(r.model, nested?.model));
-  return size === feature.size && model === feature.model;
+  return {
+    size: cellKey(firstPresent(r.size, nested?.size, r.estimate)),
+    model: cellKey(firstPresent(r.model, nested?.model)),
+  };
 }
 
 /**
@@ -176,9 +195,13 @@ function firstPresent(...values) {
 }
 
 /**
+ * Resolve the issue identifier a usage record is attributed to (`issueIdentifier`,
+ * falling back to `issueID` / `issueId`). Returns `null` when none is present.
+ * Exported so the calibration backtest groups records by the same key.
+ *
  * @param {unknown} record
  */
-function issueIdentifierFor(record) {
+export function issueIdentifierFor(record) {
   if (record === null || typeof record !== 'object' || Array.isArray(record)) return null;
   const r = /** @type {Record<string, unknown>} */ (record);
   const value = firstPresent(r.issueIdentifier, r.issueID, r.issueId);
@@ -187,9 +210,13 @@ function issueIdentifierFor(record) {
 }
 
 /**
+ * The non-negative `totalTokens` a usage record contributes, or `null` when the
+ * record is `usageSource === "unavailable"` or carries no valid count. Exported
+ * so the calibration backtest sums each issue's cost exactly as the forecaster does.
+ *
  * @param {unknown} record
  */
-function totalTokensFor(record) {
+export function totalTokensFor(record) {
   if (record === null || typeof record !== 'object' || Array.isArray(record)) return null;
   const r = /** @type {Record<string, unknown>} */ (record);
   if (r.usageSource === 'unavailable') return null;
