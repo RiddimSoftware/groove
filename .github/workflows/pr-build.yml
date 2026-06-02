@@ -36,6 +36,10 @@ jobs:
           for f in packages/llm-cost-attribution/src/*.mjs packages/llm-cost-attribution/src/transcripts/*.mjs; do
             node --check "$f"
           done
+          node --check packages/llm-cost-estimation/bin/llm-cost-estimate.mjs
+          for f in packages/llm-cost-estimation/src/*.mjs; do
+            node --check "$f"
+          done
 
       - name: Run tests
         run: |
@@ -49,4 +53,6 @@ jobs:
             packages/llm-cost-attribution/test/usage-jsonl.test.mjs \
             packages/llm-cost-attribution/test/transcript-to-usage.test.mjs \
             packages/llm-cost-attribution/test/pricing.test.mjs \
-            packages/llm-cost-attribution/test/multi-issue.test.mjs
+            packages/llm-cost-attribution/test/multi-issue.test.mjs \
+            packages/llm-cost-estimation/test/enrich.test.mjs \
+            packages/llm-cost-estimation/test/smoke.test.mjs
