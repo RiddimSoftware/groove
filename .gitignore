@@ -1,3 +1,8 @@
 node_modules/
 .DS_Store
 *.log
+
+# Local Symphony orchestration — workflow config + runtime workspaces; kept out of the public repo.
+# symphonyd reads WORKFLOW.md from the working tree at runtime, so it need not be committed.
+.symphony/
+WORKFLOW.md
