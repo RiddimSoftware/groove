@@ -2,7 +2,9 @@
 
 > Forecast LLM cost from Linear issue story-point estimates before work begins.
 
-**Status: skeleton — implementation in progress.**
+**Status: in progress** — `enrichUsageWithEstimate` and `forecastIssueCost`
+(single-issue) ship today; `forecastProjectCost` and `calibrate` are still
+stubs that throw `Error('not implemented')`.
 
 This package is a sibling of [`llm-cost-attribution`](../llm-cost-attribution), which measures actual cost after work completes. `llm-cost-estimation` forecasts cost *before* work starts, using historical calibration data and story-point estimates.
 
@@ -10,7 +12,7 @@ This package is a sibling of [`llm-cost-attribution`](../llm-cost-attribution), 
 
 See [docs/use-cases.md](docs/use-cases.md) for the use-case catalog — ports, adapters, and boundary rules for each behavior.
 
-## Planned API
+## API
 
 ```js
 import {
@@ -22,9 +24,14 @@ import {
 } from 'llm-cost-estimation';
 ```
 
-`forecastIssueCost`, `forecastProjectCost`, and `calibrate` currently throw
-`Error('not implemented')` — see the project issues for the implementation
-roadmap.
+`forecastIssueCost({ size, model }, records)` (re-exported from
+[`llm-cost-attribution`](../llm-cost-attribution)) returns P50/P80 + n for
+tokens, turns, dollars, and (for Codex cells with rate_limits samples) the
+per-issue peak primary-window quota fraction. Records are matched on `size`
+and `model`; `size` falls back to the spec's optional `estimate` field for
+forward compatibility.
+
+`forecastProjectCost` and `calibrate` are still stubs.
 
 ## Enriching usage with estimates
 
@@ -50,8 +57,24 @@ is the production adapter; tests inject a fake source and make no network calls.
 ## CLI
 
 ```
+# Forecast at a fixed size — no Linear token required.
+llm-cost-estimate --size L --model claude-sonnet-4-6 --from-usage ~/usage.jsonl
+
+# Resolve an issue's size via Linear (requires LINEAR_API_TOKEN) and forecast
+# at that size.
+llm-cost-estimate --issue GRV-123 --model claude-sonnet-4-6 --from-usage ~/usage.jsonl
+
+# Machine-readable output.
+llm-cost-estimate --size L --model claude-sonnet-4-6 --from-usage ~/usage.jsonl --json
+
 llm-cost-estimate --help
 ```
+
+The CLI reads estimate-tagged usage records (Symphony Cost Telemetry
+Extension spec §5; see `enrichUsageWithEstimate` to stamp `estimate` onto
+records produced by `llm-cost-attribution`'s backfill) and prints
+P50/P80 + n for tokens, turns, dollars, and the Codex primary-window quota
+fraction (single-issue only — never summed across issues).
 
 ## License
 
