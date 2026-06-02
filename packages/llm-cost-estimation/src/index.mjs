@@ -1,9 +1,24 @@
 /**
  * Public API for `llm-cost-estimation`.
  *
- * Each export is a stub that throws until its implementing issue lands.
- * Import from this barrel — do not import from sub-modules directly.
+ * Implemented exports are re-exported from their sub-modules; the remaining
+ * stubs throw until their implementing issue lands. Import from this barrel —
+ * do not import from sub-modules directly.
  */
+
+/**
+ * Stamp the Symphony Cost Telemetry Extension's optional `estimate` field onto
+ * usage records by joining each record's issue to its Linear story-point
+ * estimate via an injected `LinearEstimateSource` port. Pure transform — see
+ * `enrich.mjs`.
+ */
+export { enrichUsageWithEstimate, isValidEstimate } from './enrich.mjs';
+
+/**
+ * Linear-backed `LinearEstimateSource` adapter for `enrichUsageWithEstimate`.
+ * Reads the API token from an injected option or `LINEAR_API_TOKEN`.
+ */
+export { createLinearEstimateSource } from './linear-estimate-source.mjs';
 
 /**
  * Forecast the expected LLM cost for a single Linear issue, given its
@@ -28,20 +43,6 @@ export async function forecastIssueCost(issueIdentifier, estimate, options = {})
  * @returns {Promise<object>}
  */
 export async function forecastProjectCost(projectId, issues, options = {}) {
-  throw new Error('not implemented');
-}
-
-/**
- * Attach a cost forecast to an existing usage record produced by
- * `llm-cost-attribution`, returning an enriched record that includes both
- * actual and forecasted cost.
- *
- * @param {object} usageRecord  A usage record from `llm-cost-attribution`.
- * @param {number} estimate     Story-point estimate for the issue.
- * @param {object} [options]
- * @returns {object}
- */
-export function enrichUsageWithEstimate(usageRecord, estimate, options = {}) {
   throw new Error('not implemented');
 }
 
