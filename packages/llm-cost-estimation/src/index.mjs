@@ -21,17 +21,12 @@ export { enrichUsageWithEstimate, isValidEstimate } from './enrich.mjs';
 export { createLinearEstimateSource } from './linear-estimate-source.mjs';
 
 /**
- * Forecast the expected LLM cost for a single Linear issue, given its
- * story-point estimate and a calibration dataset.
- *
- * @param {string} issueIdentifier  e.g. "GRV-42"
- * @param {number} estimate         Story-point estimate (e.g. 1, 2, 3).
- * @param {object} [options]
- * @returns {Promise<object>}
+ * Forecast tokens / turns / dollars / quota P50–P80 for a `{ size, model }`
+ * cell from a set of estimate-tagged usage records. Re-exported from
+ * `llm-cost-attribution`, which owns the empirical-quantile forecaster and
+ * its `PricingTable` / `QuotaModel` adapters.
  */
-export async function forecastIssueCost(issueIdentifier, estimate, options = {}) {
-  throw new Error('not implemented');
-}
+export { forecastIssueCost } from 'llm-cost-attribution';
 
 /**
  * Forecast the aggregate LLM cost for an entire Linear project, given per-issue
