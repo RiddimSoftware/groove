@@ -1,0 +1,41 @@
+{
+  "name": "llm-cost-estimation",
+  "version": "0.1.0",
+  "description": "Forecast LLM cost from Linear issue estimates before work begins.",
+  "type": "module",
+  "bin": {
+    "llm-cost-estimate": "bin/llm-cost-estimate.mjs"
+  },
+  "main": "./src/index.mjs",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "anthropic",
+    "tokens",
+    "cost",
+    "estimation",
+    "forecast",
+    "agentic",
+    "autonomous-developer",
+    "symphony"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RiddimSoftware/groove.git",
+    "directory": "packages/llm-cost-estimation"
+  }
+}
