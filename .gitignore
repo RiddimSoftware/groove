@@ -2,6 +2,12 @@ node_modules/
 .DS_Store
 *.log
 
+# Local-only baked transcripts produced by `llm-cost --bake`. The leak-safety
+# guard (packages/llm-cost-estimation) treats these as carrying real
+# workspace paths; gitignoring them ensures they never reach a public commit.
+backfill.out
+*.backfill.out
+
 # Local Symphony orchestration — workflow config + runtime workspaces; kept out of the public repo.
 # symphonyd reads WORKFLOW.md from the working tree at runtime, so it need not be committed.
 .symphony/

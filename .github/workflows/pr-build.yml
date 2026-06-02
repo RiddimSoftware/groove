@@ -55,4 +55,5 @@ jobs:
             packages/llm-cost-attribution/test/pricing.test.mjs \
             packages/llm-cost-attribution/test/multi-issue.test.mjs \
             packages/llm-cost-estimation/test/enrich.test.mjs \
-            packages/llm-cost-estimation/test/smoke.test.mjs
+            packages/llm-cost-estimation/test/smoke.test.mjs \
+            packages/llm-cost-estimation/test/no-org-data.test.mjs
