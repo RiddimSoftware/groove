@@ -8,7 +8,10 @@
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { rollupSessions } from './aggregator.mjs';
+import { forecastIssueCost as forecastIssueCostCore } from './forecast.mjs';
 import { DEFAULT_CWD_PATTERN, issueFromClaudeProjectDirName, issueFromCwd } from './issue-pattern.mjs';
+import { calculateCost } from './pricing.mjs';
+import { findWindow } from './quota.mjs';
 import { findClaudeProjectDirs, listJsonlsRecursively, parseClaudeSession } from './transcripts/claude.mjs';
 import { listCodexRollouts, parseCodexSession } from './transcripts/codex.mjs';
 import { sessionToUsageRecords } from './transcript-to-usage.mjs';
@@ -21,7 +24,6 @@ export { rollupUsageRecords } from './usage-aggregator.mjs';
 export { sessionToUsageRecords } from './transcript-to-usage.mjs';
 export {
   DEFAULT_MIN_FORECAST_SAMPLE_SIZE,
-  forecastIssueCost,
   iterateEstimateTaggedUsageSource,
 } from './forecast.mjs';
 export { empiricalP50P80, empiricalQuantile } from './quantiles.mjs';
@@ -49,6 +51,59 @@ export {
   normalizeModelName,
   ratesForModel,
 } from './pricing.mjs';
+
+/**
+ * Default `PricingTable` adapter for `forecastIssueCost`. Delegates to
+ * `pricing.mjs` so the forecaster never has to import the rate table itself
+ * (forecast.mjs is a core module; pricing.mjs is its adapter).
+ *
+ * @type {{ priceFor: (model: string, buckets: object) => number | null }}
+ */
+export const DEFAULT_PRICING_TABLE = {
+  priceFor(model, buckets) {
+    const cost = calculateCost(model, buckets);
+    return cost === null ? null : cost.totalUsd;
+  },
+};
+
+/**
+ * Default `QuotaModel` adapter for `forecastIssueCost`. Extracts the
+ * Codex-style spec §5.2.3 primary-window `usedPercent` from a usage record
+ * and returns it as a fraction in `[0, 1]`. Records without a Codex provider
+ * tag or without a primary window yield `null`, which the forecaster reads
+ * as "no quota signal for this issue".
+ *
+ * @type {{ quotaFractionFor: (record: object) => number | null }}
+ */
+export const DEFAULT_QUOTA_MODEL = {
+  quotaFractionFor(record) {
+    if (record === null || typeof record !== 'object') return null;
+    if (record.provider !== 'codex') return null;
+    const quota = record.quota;
+    if (quota === null || typeof quota !== 'object' || !Array.isArray(quota.windows)) return null;
+    const primary = findWindow({ windows: quota.windows }, 'primary');
+    if (primary === undefined || typeof primary.usedPercent !== 'number') return null;
+    return primary.usedPercent / 100;
+  },
+};
+
+/**
+ * Library-default `forecastIssueCost`: wires the core forecaster to the
+ * `pricing.mjs` / `quota.mjs` adapters so the $ and quota channels populate
+ * out of the box. Callers can override either port via `options` for tests
+ * or alternate providers.
+ *
+ * @param {Parameters<typeof forecastIssueCostCore>[0]} featureRecord
+ * @param {Parameters<typeof forecastIssueCostCore>[1]} [usageSource]
+ * @param {Parameters<typeof forecastIssueCostCore>[2]} [options]
+ */
+export function forecastIssueCost(featureRecord, usageSource = [], options = {}) {
+  return forecastIssueCostCore(featureRecord, usageSource, {
+    ...options,
+    pricingTable: options.pricingTable ?? DEFAULT_PRICING_TABLE,
+    quotaModel: options.quotaModel ?? DEFAULT_QUOTA_MODEL,
+  });
+}
 
 /**
  * Read every Claude session whose encoded project directory name matches the
