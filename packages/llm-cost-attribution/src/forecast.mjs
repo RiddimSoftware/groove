@@ -23,8 +23,36 @@ export const DEFAULT_MIN_FORECAST_SAMPLE_SIZE = 5;
  * }>}
  */
 export async function forecastIssueCost(featureRecord, usageSource = [], options = {}) {
-  const feature = normalizeFeatureRecord(featureRecord);
   const minSampleSize = normalizeMinSampleSize(options.minSampleSize);
+  const issueCosts = await collectCellSamples(featureRecord, usageSource);
+  const n = issueCosts.length;
+
+  return {
+    tokens: costForecast(issueCosts.map((cost) => cost.tokens), n),
+    turns: costForecast(issueCosts.map((cost) => cost.turns), n),
+    lowConfidence: n < minSampleSize,
+    empty: n === 0,
+  };
+}
+
+/**
+ * The per-cell sampler that `forecastIssueCost` reads. Returns the empirical
+ * per-issue cost observations for a `{ size, model }` cell: one entry per
+ * distinct historical issue, with that issue's turns rolled up to project-level
+ * totals. This is the distribution interface project-level forecasters consume
+ * — they draw from these observed per-issue costs rather than refitting a
+ * parametric model or re-walking raw records themselves.
+ *
+ * Each observation carries `tokens` and `turns` (the channels `forecastIssueCost`
+ * forecasts) plus the `inputTokens` / `outputTokens` split, so a caller that
+ * supplies a pricing port can derive a dollar cost per observed issue.
+ *
+ * @param {{ size: unknown, model: unknown, [key: string]: unknown }} featureRecord
+ * @param {Iterable<object> | AsyncIterable<object> | { records?: unknown, iterate?: unknown }} [usageSource]
+ * @returns {Promise<Array<{ tokens: number, turns: number, inputTokens: number, outputTokens: number }>>}
+ */
+export async function collectCellSamples(featureRecord, usageSource = []) {
+  const feature = normalizeFeatureRecord(featureRecord);
   const perIssue = new Map();
 
   for await (const record of iterateEstimateTaggedUsageSource(usageSource)) {
@@ -38,22 +66,16 @@ export async function forecastIssueCost(featureRecord, usageSource = [], options
 
     let aggregate = perIssue.get(issueIdentifier);
     if (aggregate === undefined) {
-      aggregate = { tokens: 0, turns: 0 };
+      aggregate = { tokens: 0, turns: 0, inputTokens: 0, outputTokens: 0 };
       perIssue.set(issueIdentifier, aggregate);
     }
     aggregate.tokens += totalTokens;
     aggregate.turns += 1;
+    aggregate.inputTokens += nonNegInt(record.inputTokens);
+    aggregate.outputTokens += nonNegInt(record.outputTokens);
   }
 
-  const issueCosts = [...perIssue.values()];
-  const n = issueCosts.length;
-
-  return {
-    tokens: costForecast(issueCosts.map((cost) => cost.tokens), n),
-    turns: costForecast(issueCosts.map((cost) => cost.turns), n),
-    lowConfidence: n < minSampleSize,
-    empty: n === 0,
-  };
+  return [...perIssue.values()];
 }
 
 /**
@@ -196,6 +218,16 @@ function totalTokensFor(record) {
   return typeof r.totalTokens === 'number' && Number.isFinite(r.totalTokens) && r.totalTokens >= 0
     ? r.totalTokens
     : null;
+}
+
+/**
+ * Coerce an optional token-count field to a non-negative number, defaulting to
+ * 0 when absent or null (the spec allows null token counts on some records).
+ *
+ * @param {unknown} value
+ */
+function nonNegInt(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 /**
