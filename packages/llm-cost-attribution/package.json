@@ -14,7 +14,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test && npm run test:boundary",
+    "test:boundary": "node scripts/check-boundary.mjs"
   },
   "keywords": [
     "claude",
