@@ -20,6 +20,12 @@ export { rollupSessions } from './aggregator.mjs';
 export { rollupUsageRecords } from './usage-aggregator.mjs';
 export { sessionToUsageRecords } from './transcript-to-usage.mjs';
 export {
+  DEFAULT_MIN_FORECAST_SAMPLE_SIZE,
+  forecastIssueCost,
+  iterateEstimateTaggedUsageSource,
+} from './forecast.mjs';
+export { empiricalP50P80, empiricalQuantile } from './quantiles.mjs';
+export {
   SCHEMA_VERSION,
   findUsageFiles,
   readUsageRecords,
