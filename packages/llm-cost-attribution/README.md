@@ -1,6 +1,6 @@
 # llm-cost-attribution
 
-Per-issue token, turn, and quota analytics for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex) sessions. Reads the CLIs' own session JSONLs — **no telemetry pipeline, no database, no API keys**.
+Per-issue cost analytics for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex) sessions — how many **tokens** an issue burned, how many **turns** it took (one agent request → response is a turn), and how much of your Codex/Claude plan's rate-limit **quota** it ate. It reads the CLIs' own session logs (JSONL = one JSON record per line) — **no telemetry pipeline, no database, no API keys**.
 
 ```bash
 npx llm-cost-attribution EPAC-1940
@@ -19,13 +19,15 @@ CODEX  (4 sessions)   Models: gpt-5-codex   Turns: 340
   Quota (pro, 345 samples):  5h 58%→64% (peak 64%)   7d 56%→57% (peak 57%)
 ```
 
+Reading that block: **cache read** is tokens the provider served from its prompt cache (cheap, and usually most of the total); **output (reasoning)** is the model's hidden thinking tokens, billed separately from the **visible** answer; **Quota** is how much of your Codex plan's two rolling rate-limit windows — a 5-hour and a 7-day one — these sessions used.
+
 Requires Node 20+. Zero runtime dependencies.
 
 ## How it works
 
-Both CLIs persist every run as JSONL — Claude Code in `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, Codex in `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — and each file carries provider-reported token usage per turn (the same numbers your account is billed against), plus Codex `rate_limits.*.used_percent`. This package walks both directories, keeps sessions whose **working directory** matches the issue ID you ask for, and aggregates.
+Both CLIs persist every run as JSONL — Claude Code in `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` (`<encoded-cwd>` is just the run's working directory with `/` and `.` rewritten to `-`), Codex in `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — and each file records, per turn, the provider-reported token counts (the same numbers your account is billed against) plus, for Codex, its rate-limit usage. This package walks both directories, keeps the sessions whose **working directory** matches the issue ID you ask for, and adds them up.
 
-The issue↔session join is the `cwd`: under [Symphony's spec](https://github.com/openai/symphony/blob/main/SPEC.md) every agent runs in a per-issue workspace (`<workspace.root>/<ISSUE-ID>`), so the CLIs record the issue ID in each transcript automatically — no custom pipeline. The default `--cwd-pattern` matches both the spec default (`<tmp>/symphony_workspaces/<ID>`) and the common in-repo layout (`<repo>/.symphony/workspaces/<ID>`). For any other layout, pass your own regex with one capture group:
+How does a session get matched to an issue? By its **working directory** (`cwd`). Under [Symphony](https://github.com/openai/symphony/blob/main/SPEC.md)'s spec — Symphony being an orchestrator that runs coding agents one issue at a time — each agent runs in a directory dedicated to its issue (`<workspace.root>/<ISSUE-ID>`), so the issue ID is already baked into every transcript's path; no custom pipeline needed. The default `--cwd-pattern` (the regex that pulls the issue ID out of that path) matches both the spec default (`<tmp>/symphony_workspaces/<ID>`) and the common in-repo layout (`<repo>/.symphony/workspaces/<ID>`). For any other layout, pass your own regex with one capture group around the ID:
 
 ```bash
 llm-cost FOO-12 --cwd-pattern '-([A-Z]+-\d+)$'   # ../repo-worktrees/<ID>
@@ -82,9 +84,9 @@ rm -rf ~/.claude/projects ~/.codex/sessions   # once numbers verified
 
 The bake is lossless for everything the analysis uses (quota windows, Claude cache tiers, Codex reasoning/visible split, totals, models, timestamps, workspace provenance). The format follows the [Symphony Cost Telemetry Extension spec](https://github.com/RiddimSoftware/groove/blob/main/specs/symphony-cost-telemetry-extension/SPEC.md), so a conformant orchestrator can emit `usage.jsonl` directly and skip the bake — optional interop, not required.
 
-## Is the P80 actually a P80? (`calibrate`)
+## Is the forecast trustworthy? (`calibrate`)
 
-A forecast nobody checked is a horoscope. `calibrate` backtests `forecastIssueCost`'s P80 band against a local, estimate-tagged `usage.jsonl`: it groups into `{ size, model }` cells, holds out a reproducible fraction (`--seed`), fits on the rest, and reports the empirical fraction of held-out actuals at/below the predicted P80. Cells drifting from 80% by more than `--threshold` are flagged ⚠.
+A **P80** is the 80th-percentile cost — the number 80% of comparable issues come in at or below. Claiming "P80 = 12K tokens" is only honest if, on issues the forecaster never saw, the real cost actually lands under 12K about 80% of the time; otherwise it's a horoscope. `calibrate` checks exactly that against a local `usage.jsonl` whose records are **estimate-tagged** (each one carries the issue's size estimate). It sorts the records into **cells** — groups of past issues sharing the same `{ size, model }` — holds out a reproducible slice of each cell (`--seed` makes the split repeatable), forecasts from what's left, and measures how often the held-out actuals really fell at or below the predicted P80. Any cell whose hit-rate drifts from 80% by more than `--threshold` is flagged ⚠.
 
 ```bash
 llm-cost calibrate ~/backfill.out --seed 1 --holdout 0.2
