@@ -73,6 +73,9 @@ export {
   normalizeModelName,
   ratesForModel,
 } from './pricing.mjs';
+export { correlateCostWithFeature } from './correlate.mjs';
+export { readGitDiffs } from './git-diff-source.mjs';
+export { joinCostWithFeature } from './cost-feature-join.mjs';
 
 /**
  * Default `PricingTable` adapter for `forecastIssueCost`. Delegates to
