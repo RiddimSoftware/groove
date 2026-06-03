@@ -12,6 +12,8 @@ export const BOUNDARY_CONFIG = {
     'src/quantiles.mjs',
     'src/project-forecast.mjs',
     'src/enrich.mjs',
+    'src/correlate.mjs',
+    'src/cost-feature-join.mjs',
   ],
   adapterModules: [
     { path: 'src/linear-estimate-source.mjs', kind: 'Linear adapter' },
@@ -20,6 +22,7 @@ export const BOUNDARY_CONFIG = {
     { path: 'src/transcripts/', kind: 'transcript filesystem adapter' },
     { path: 'src/usage-jsonl.mjs', kind: 'usage JSONL filesystem adapter' },
     { path: 'src/util.mjs', kind: 'filesystem utility adapter' },
+    { path: 'src/git-diff-source.mjs', kind: 'local-git diff adapter' },
     { path: 'bin/', kind: 'CLI adapter' },
   ],
   forbiddenPackages: [
@@ -38,8 +41,13 @@ export const BOUNDARY_CONFIG = {
       kind: 'Linear SDK',
       remediation: 'Depend on the EstimateTaggedUsageSource / LinearEstimateSource port instead.',
     },
+    {
+      pattern: /^(?:node:)?child_process$/,
+      kind: 'child_process API',
+      remediation: 'Shelling out (e.g. `git`) belongs in `LocalGitDiffSource`. The correlate core and join logic depend only on in-memory data — depend on the `DiffSource` port instead.',
+    },
   ],
-  docsPath: 'docs/use-cases.md',
+  docsPath: 'docs/architecture/use-case-catalog.md',
 };
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
