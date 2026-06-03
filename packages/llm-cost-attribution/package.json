@@ -1,6 +1,6 @@
 {
   "name": "llm-cost-attribution",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no telemetry pipeline required.",
   "type": "module",
   "bin": {
