@@ -1,6 +1,6 @@
 {
   "name": "llm-cost-estimation",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Forecast LLM cost from Linear issue estimates before work begins.",
   "type": "module",
   "bin": {
@@ -33,7 +33,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "llm-cost-attribution": "*"
+    "llm-cost-attribution": "^0.2.0"
   },
   "license": "MIT",
   "repository": {
