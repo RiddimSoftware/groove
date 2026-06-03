@@ -111,6 +111,21 @@ const result  = await backfillUsageFromTranscripts({ outFile: '/tmp/usage.jsonl'
 
 Pass `{ cwdPattern, claudeProjectsDir, codexSessionsDir }` to override defaults.
 
+### Diff-size feature records
+
+`readGitDiffs(repoPath, { revRange, keyPattern })` reads local `git log --numstat`
+output and yields one aggregated record per issue key found in commit subjects:
+
+```js
+for await (const diff of readGitDiffs('/path/to/repo')) {
+  console.log(diff.key, diff.additions + diff.deletions, diff.changedFiles);
+}
+```
+
+It is local-first: no GitHub token, network, or API calls. The tradeoff is that it
+sees only history already present in the checkout, and commits must carry issue
+keys in their subjects, as with squash-merge subjects like `[ABC-12]: add widget`.
+
 ## What it doesn't (and can't) do
 
 - **Story-point estimates** — live in your tracker, not the transcripts (see the sibling `llm-cost-estimation`).

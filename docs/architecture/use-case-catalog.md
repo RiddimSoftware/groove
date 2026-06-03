@@ -20,3 +20,14 @@ Ports: ForecastIssueCost's per-cell sampler (`collectCellSamples`); the shared `
 Primary adapters: seeded RNG (mulberry32, in-module); `pricing.mjs` (PricingTable).
 Notes: tokens, turns, and dollars only — quota and wall-clock are excluded because they are windowed / scheduling quantities that don't sum. v0 assumes inter-issue independence (a documented simplification: correlated issues diversify less).
 Current implementation: `packages/llm-cost-attribution/src/project-forecast.mjs`
+
+### ReadGitDiffs
+Actor: Operator
+Goal: Read per-issue code-change sizes from local git history so cost can later be correlated with diff size without GitHub access.
+Inputs: local repository path, optional rev range, optional issue-key pattern.
+Outputs: DiffRecord `{ key, additions, deletions, changedFiles, shas }` plus unmatched/error summary.
+Entities / values: DiffRecord.
+Ports: DiffSource.
+Primary adapters: LocalGitDiffSource (`git log --numstat` via local `git`).
+Notes: adapter-only; it sees only locally-pulled history and depends on issue keys in commit subjects.
+Current implementation: `packages/llm-cost-attribution/src/git-diff-source.mjs`
