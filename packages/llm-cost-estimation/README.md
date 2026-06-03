@@ -8,11 +8,14 @@ This package forecasts what is likely to be spent before work starts.
 
 ## What it does
 
-- Parse usage records that follow the [Symphony Cost Telemetry Extension](../specs/symphony-cost-telemetry-extension/SPEC.md).
-- Forecast P50/P80 token, turn, dollar, and quota (Codex primary-window fraction) ranges for one estimate/model cell (`{ size, model }`).
-- Return forecast points with `n`, and mark low-confidence cells explicitly.
+It looks at what past issues of a given size *actually* cost and forecasts the same for a new one. Concretely:
 
-For now, this package does not mutate usage records; it consumes telemetry and outputs a forecast.
+- Reads **usage records** — one row of cost data per agent **turn** (a turn is one agent request → response) — that follow the [Symphony Cost Telemetry Extension](../specs/symphony-cost-telemetry-extension/SPEC.md).
+- Groups that history into **cells**: buckets of past issues that share the same size and model, written `{ size, model }`. A forecast for an `L` issue on `claude-sonnet-4-6` is read off the `{ L, claude-sonnet-4-6 }` cell.
+- Forecasts a **range**, not a single number: the **P50** (median — half of the cell's past issues cost at or below it) and the **P80** (80th percentile — 4 out of 5 did), for **tokens**, **turns**, **dollars**, and Codex **quota** (the fraction of your plan's rate-limit window the issue is predicted to use).
+- Always reports **`n`** — how many past issues the forecast is based on — and flags a cell **low-confidence** when `n` is small. A forecast from 3 issues is barely a forecast.
+
+It only *reads* telemetry and prints a forecast; it never modifies your usage records.
 
 ## Install
 
@@ -33,7 +36,7 @@ llm-cost-estimate --issue <ID> --model <MODEL> [--from-usage <usage.jsonl-or-dir
 llm-cost-estimate --help
 ```
 
-- `--size` takes a story-point or T-shirt size directly and is tracker-free.
+- `--size` takes the issue's size directly — a **story point** (the number, like 1/2/3/5/8, your tracker assigns to rate an issue's effort) or a **T-shirt size** (S/M/L/XL) — so it needs no tracker access.
 - `--issue` resolves the estimate from your tracker through `createLinearEstimateSource` (requires `LINEAR_API_TOKEN`).
 - `--from-usage` accepts a `usage.jsonl` file or a directory of `usage*.jsonl` files (same convention used by attribution backfill).
 - `--json` prints machine-readable JSON.
@@ -57,6 +60,8 @@ turns              42            58           18
 dollars            $0.74         $1.01        18
 quota (frac)       61.0%         68.5%        18
 ```
+
+**Dollars** here are *API-equivalent* — what those tokens would cost at pay-as-you-go API rates, not what a subscription plan is billed (the same convention `llm-cost-attribution` uses); on a subscription, the **quota** row is the one that reflects real marginal cost. `n = 18 (low confidence)` means only 18 past issues fell in this cell — read the range loosely.
 
 JSON output:
 
@@ -128,8 +133,7 @@ Throws `Error('not implemented')` until the next sequencing issue lands.
   low coverage is surfaced via `lowConfidence` and `n`.
 - It does **not** merge multiple runs of the same issue for delivery quality.
 
-Quota output is only the per-issue single-cell Codex peak-primary fraction from telemetry.
-It is not additive across issues.
+The **quota** forecast is per-issue only — the peak fraction of Codex's primary rate-limit window a single issue is expected to hit. It does not add up across issues into a project-level quota.
 
 ## License
 
