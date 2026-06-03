@@ -31,8 +31,8 @@ describe('llm-cost-attribution cost-drivers barrel', () => {
     assert.equal(next.value.error, null);
   });
 
-  it('joinCostWithFeature throws "not implemented" on first iteration', async () => {
-    const gen = joinCostWithFeature([], []);
-    await assert.rejects(() => gen.next(), /not implemented/);
+  it('joinCostWithFeature (implemented in GRV-16) returns { pairs, unjoined }', async () => {
+    const out = await joinCostWithFeature({ usage: [], diffs: [] });
+    assert.deepEqual(out, { pairs: [], unjoined: { usage: [], diffs: [] } });
   });
 });
