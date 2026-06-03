@@ -241,6 +241,74 @@ export async function computeIssueCostFromUsage(issueIdentifier, usageSource) {
 }
 
 /**
+ * Walk every Claude session + every Codex rollout and yield spec-compliant
+ * usage.jsonl records one at a time. Sessions whose cwd doesn't match the
+ * configured pattern are skipped.
+ *
+ * Use this when you want to stream records to a downstream consumer (such as
+ * `dump-usage` or an in-process correlator) instead of writing them to a file.
+ * `backfillUsageFromTranscripts` is built on top of this generator.
+ *
+ * The generator's return value (from `gen.next().value` once `done` is true)
+ * is `{ recordsYielded, sessionsProcessed, sessionsSkipped }`.
+ *
+ * @param {object} [options]
+ * @param {RegExp} [options.cwdPattern]
+ * @param {string} [options.claudeProjectsDir]
+ * @param {string} [options.codexSessionsDir]
+ * @param {(progress: { phase: string, file?: string, processed: number, total: number, recordsYielded: number }) => void} [options.onProgress]
+ */
+export async function *iterateUsageFromTranscripts(options = {}) {
+  const cwdPattern = options.cwdPattern ?? DEFAULT_CWD_PATTERN;
+  const claudeRootDir = options.claudeProjectsDir ?? join(homedir(), '.claude', 'projects');
+  const codexRootDir = options.codexSessionsDir ?? join(homedir(), '.codex', 'sessions');
+  const onProgress = options.onProgress ?? (() => undefined);
+
+  let recordsYielded = 0;
+  let sessionsProcessed = 0;
+  let sessionsSkipped = 0;
+
+  // Phase 1: walk Claude project dirs and yield records for matching sessions.
+  const claudeDirs = await findClaudeProjectDirs(claudeRootDir, (encoded) => issueFromClaudeProjectDirName(encoded, cwdPattern) !== null);
+  for (let i = 0; i < claudeDirs.length; i++) {
+    const dir = claudeDirs[i];
+    const encoded = dir.split('/').pop() ?? '';
+    const issueIdentifier = issueFromClaudeProjectDirName(encoded, cwdPattern);
+    if (issueIdentifier === null) continue;
+    for (const file of await listJsonlsRecursively(dir)) {
+      const session = await parseClaudeSession(file);
+      if (session === null) { sessionsSkipped += 1; continue; }
+      const records = sessionToUsageRecords(session, issueIdentifier);
+      if (records.length === 0) { sessionsSkipped += 1; continue; }
+      for (const rec of records) yield rec;
+      recordsYielded += records.length;
+      sessionsProcessed += 1;
+    }
+    onProgress({ phase: 'claude', file: dir, processed: i + 1, total: claudeDirs.length, recordsYielded });
+  }
+
+  // Phase 2: walk Codex rollouts.
+  const codexFiles = await listCodexRollouts(codexRootDir);
+  for (let i = 0; i < codexFiles.length; i++) {
+    const file = codexFiles[i];
+    const session = await parseCodexSession(file);
+    if (session === null) { sessionsSkipped += 1; continue; }
+    const issueIdentifier = issueFromCwd(session.cwd, cwdPattern);
+    if (issueIdentifier === null) { sessionsSkipped += 1; continue; }
+    const records = sessionToUsageRecords(session, issueIdentifier);
+    if (records.length === 0) { sessionsSkipped += 1; continue; }
+    for (const rec of records) yield rec;
+    recordsYielded += records.length;
+    sessionsProcessed += 1;
+    if ((i + 1) % 100 === 0 || i + 1 === codexFiles.length) {
+      onProgress({ phase: 'codex', file, processed: i + 1, total: codexFiles.length, recordsYielded });
+    }
+  }
+
+  return { recordsYielded, sessionsProcessed, sessionsSkipped };
+}
+
+/**
  * Walk every Claude session + every Codex rollout, derive spec-compliant
  * usage.jsonl records for each, and append them to a single output file.
  *

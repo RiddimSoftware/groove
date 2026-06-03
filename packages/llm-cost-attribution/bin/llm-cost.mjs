@@ -17,7 +17,8 @@
  * For any other layout, pass `--cwd-pattern` with a JavaScript regex
  * containing one capture group for the issue identifier.
  */
-import { resolve } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
+import { extname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   backfillUsageFromTranscripts,
@@ -25,7 +26,11 @@ import {
   computeIssueCost,
   computeIssueCostFromUsage,
   computeWorktreeCost,
+  correlateCostWithFeature,
+  iterateUsageFromTranscripts,
+  joinCostWithFeature,
   listKnownIssues,
+  readGitDiffs,
   readUsageRecords,
   validateUsageRecord,
 } from '../src/index.mjs';
@@ -54,6 +59,15 @@ async function main() {
       holdout: { type: 'string' },
       quantile: { type: 'string' },
       threshold: { type: 'string' },
+      // cost-drivers / dump-* / correlate verbs
+      repo: { type: 'string' },
+      metric: { type: 'string' },
+      'join-by': { type: 'string' },
+      'key-pattern': { type: 'string' },
+      'rev-range': { type: 'string' },
+      window: { type: 'string' },
+      pairs: { type: 'string' },
+      csv: { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -147,6 +161,35 @@ async function main() {
       return;
     }
     printCalibrationReport(report, inputPath, invalidLines);
+    return;
+  }
+
+  // `llm-cost cost-drivers --repo <path>` — end-to-end cost↔diff correlation.
+  // Reads cost from either transcripts (default) or --from-usage, reads diffs
+  // from a local git repo, joins by the chosen strategy, and prints the
+  // Spearman / Pearson / decile readout.
+  if (command === 'cost-drivers') {
+    await runCostDrivers(values, options);
+    return;
+  }
+
+  // `llm-cost dump-usage` — emit the cost stream as JSONL for the user to
+  // join externally. Source: --from-usage if set; otherwise transcripts.
+  if (command === 'dump-usage') {
+    await runDumpUsage(values, options);
+    return;
+  }
+
+  // `llm-cost dump-diffs --repo <path>` — emit the diff stream as JSONL.
+  if (command === 'dump-diffs') {
+    await runDumpDiffs(values);
+    return;
+  }
+
+  // `llm-cost correlate --pairs <file.csv|json>` — read externally-joined
+  // {feature, cost} pairs and print the readout. No git/transcripts needed.
+  if (command === 'correlate') {
+    await runCorrelate(values);
     return;
   }
 
@@ -342,6 +385,11 @@ function printUsage() {
        llm-cost list
        llm-cost backfill --out <usage.jsonl-path>
        llm-cost calibrate <usage.jsonl-or-dir> [--seed N] [--holdout F]
+       llm-cost cost-drivers --repo <path> [--metric tokens|turns]
+                             [--join-by issue|worktree|time] [--window <dur>]
+       llm-cost dump-usage [--from-usage <path>] [--json]
+       llm-cost dump-diffs --repo <path> [--key-pattern <regex>] [--json]
+       llm-cost correlate --pairs <file.csv|json> [--csv <out>] [--json]
        llm-cost --help
 
 Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions.
@@ -374,7 +422,30 @@ Options:
   --quantile <0..1>       (calibrate only) Quantile band to test. Default 0.8 (P80).
   --threshold <0..1>      (calibrate only) Flag a cell when coverage drifts from
                           the target by more than this. Default 0.1 (10 points).
-  --json                  Emit machine-readable JSON instead of the table.
+  --repo <path>           (cost-drivers / dump-diffs only) Local git repo to read
+                          diffs from. Diff size = additions + deletions.
+  --metric tokens|turns   (cost-drivers only) Cost dimension to correlate. Default tokens.
+  --join-by issue|worktree|time
+                          (cost-drivers only) How to attribute cost to a diff.
+                          Default 'issue' (extract a key from commit subjects
+                          and from each cost record's issueIdentifier/workspacePath).
+                          'worktree' joins on the cost record's workspacePath.
+                          'time' attributes each cost record to the next commit
+                          inside --window, an approximate label-free fallback.
+  --window <duration>     (cost-drivers --join-by time only) Sweep window before
+                          a commit, e.g. '30m', '2h', '1d', or a millisecond integer.
+  --key-pattern <regex>   (cost-drivers / dump-diffs only) Regex for issue keys in
+                          commit subjects. Default \`[A-Z][A-Z0-9]+-\\d+\`.
+  --rev-range <range>     (cost-drivers / dump-diffs only) Optional git rev range
+                          (e.g. \`origin/main..HEAD\`).
+  --pairs <file>          (correlate only) Externally-joined pairs to read.
+                          .csv: header \`feature,cost[,key]\`; .json: array of
+                          \`{feature, cost, key?}\` objects.
+  --csv <path>            (cost-drivers / correlate only) Write per-pair rows to
+                          this caller-named path. Never written to the cwd by default.
+  --json                  Emit machine-readable JSON instead of the table. For
+                          dump-* the default is JSONL (one record per line);
+                          --json packs the records into a single JSON array.
   -h, --help              Print this message.
 
 Examples:
@@ -395,6 +466,15 @@ Examples:
   # Check whether the forecaster's P80 band is actually calibrated against a
   # local, estimate-tagged dataset. The input stays local — never committed.
   llm-cost calibrate ~/backfill.out --seed 1 --holdout 0.2
+
+  # End-to-end: what predicts how many tokens an issue eats?
+  llm-cost cost-drivers --repo ~/code/my-repo --metric tokens
+  llm-cost cost-drivers --repo ~/code/my-repo --join-by worktree --json
+
+  # Escape hatches: emit the two streams and join them yourself.
+  llm-cost dump-usage > usage.jsonl
+  llm-cost dump-diffs --repo ~/code/my-repo > diffs.jsonl
+  llm-cost correlate --pairs my-pairs.csv          # CSV: feature,cost
 `);
 }
 
@@ -636,6 +716,417 @@ function formatRate(perMillionUsd) {
   if (perMillionUsd >= 1) return `$${perMillionUsd.toFixed(2)}`;
   if (perMillionUsd >= 0.01) return `$${perMillionUsd.toFixed(3)}`;
   return `$${perMillionUsd.toFixed(4)}`;
+}
+
+/* ------------------------------------------------------------------------- *
+ * cost-drivers / dump-* / correlate verbs
+ * ------------------------------------------------------------------------- */
+
+const METRICS = ['tokens', 'turns'];
+const JOIN_BY_TO_STRATEGY = { issue: 'issue-key', worktree: 'worktree', time: 'time' };
+const JOIN_BY_CHOICES = Object.keys(JOIN_BY_TO_STRATEGY);
+
+async function runCostDrivers(values, transcriptOptions) {
+  const repo = values.repo;
+  if (typeof repo !== 'string' || repo === '') {
+    console.error('error: cost-drivers requires --repo <path>');
+    process.exit(1);
+  }
+  const metric = pickMetric(values.metric);
+  const joinByLabel = pickJoinBy(values['join-by']);
+  const strategy = JOIN_BY_TO_STRATEGY[joinByLabel];
+  const keyPattern = parseRegexOption(values['key-pattern'], 'key-pattern');
+  const cwdPattern = parseRegexOption(values['cwd-pattern'], 'cwd-pattern') ?? DEFAULT_CWD_PATTERN;
+
+  const usage = values['from-usage'] !== undefined
+    ? readUsageRecords(values['from-usage'])
+    : iterateUsageFromTranscripts({
+        cwdPattern,
+        claudeProjectsDir: transcriptOptions.claudeProjectsDir,
+        codexSessionsDir: transcriptOptions.codexSessionsDir,
+      });
+
+  const diffsGen = readGitDiffs(resolve(repo), {
+    keyPattern: keyPattern ?? undefined,
+    revRange: values['rev-range'] ?? undefined,
+  });
+
+  // Drain the diffs into an array so we can grab the unmatched/error summary
+  // alongside the records the join consumes.
+  const diffRecords = [];
+  let diffSummary = null;
+  while (true) {
+    const step = await diffsGen.next();
+    if (step.done) { diffSummary = step.value; break; }
+    diffRecords.push(step.value);
+  }
+  if (diffSummary !== null && diffSummary.error !== null) {
+    console.error(`error: ${diffSummary.error.message}`);
+    process.exit(1);
+  }
+
+  const joinArgs = {
+    usage,
+    diffs: diffRecords,
+    strategy,
+    cwdPattern,
+  };
+  if (strategy === 'time') joinArgs.window = parseDurationMs(values.window);
+
+  let joinOut;
+  try {
+    joinOut = await joinCostWithFeature(joinArgs);
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Project to scalar { feature, cost } for the chosen metric.
+  const flatPairs = joinOut.pairs.map((p) => ({
+    key: p.key,
+    feature: p.feature,
+    cost: p.cost[metric],
+  }));
+  const result = correlateCostWithFeature(flatPairs);
+
+  if (values.csv !== undefined) await writeCsvPairs(values.csv, flatPairs, metric);
+
+  const unmatched = diffSummary?.unmatched ?? {};
+  const payload = {
+    metric,
+    joinBy: joinByLabel,
+    repo: resolve(repo),
+    n: result.n,
+    spearman: result.spearman,
+    pearsonLinear: result.pearsonLinear,
+    pearsonLogLog: result.pearsonLogLog,
+    pearsonLogLogDropped: result.pearsonLogLogDropped,
+    deciles: result.deciles,
+    unjoined: {
+      usage: joinOut.unjoined.usage,
+      diffs: joinOut.unjoined.diffs,
+    },
+    unmatchedCommits: unmatched.unmatchedCommits ?? 0,
+    skippedEmptyCommits: unmatched.skippedEmptyCommits ?? 0,
+  };
+
+  if (values.json === true) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  printCorrelationReport(payload, { repoLabel: resolve(repo) });
+}
+
+async function runDumpUsage(values, transcriptOptions) {
+  const cwdPattern = parseRegexOption(values['cwd-pattern'], 'cwd-pattern') ?? DEFAULT_CWD_PATTERN;
+  const source = values['from-usage'] !== undefined
+    ? readUsageRecords(values['from-usage'])
+    : iterateUsageFromTranscripts({
+        cwdPattern,
+        claudeProjectsDir: transcriptOptions.claudeProjectsDir,
+        codexSessionsDir: transcriptOptions.codexSessionsDir,
+      });
+
+  if (values.json === true) {
+    const all = [];
+    for await (const rec of source) all.push(rec);
+    process.stdout.write(JSON.stringify(all) + '\n');
+    return;
+  }
+  for await (const rec of source) {
+    process.stdout.write(JSON.stringify(rec) + '\n');
+  }
+}
+
+async function runDumpDiffs(values) {
+  const repo = values.repo;
+  if (typeof repo !== 'string' || repo === '') {
+    console.error('error: dump-diffs requires --repo <path>');
+    process.exit(1);
+  }
+  const keyPattern = parseRegexOption(values['key-pattern'], 'key-pattern');
+  const diffsGen = readGitDiffs(resolve(repo), {
+    keyPattern: keyPattern ?? undefined,
+    revRange: values['rev-range'] ?? undefined,
+  });
+
+  const records = [];
+  let summary = null;
+  while (true) {
+    const step = await diffsGen.next();
+    if (step.done) { summary = step.value; break; }
+    records.push(step.value);
+  }
+  if (summary !== null && summary.error !== null) {
+    console.error(`error: ${summary.error.message}`);
+    process.exit(1);
+  }
+
+  if (values.json === true) {
+    process.stdout.write(JSON.stringify(records) + '\n');
+  } else {
+    for (const rec of records) process.stdout.write(JSON.stringify(rec) + '\n');
+  }
+  const u = summary?.unmatched ?? {};
+  process.stderr.write(
+    `# ${records.length} records, ${u.unmatchedCommits ?? 0} unmatched commit${(u.unmatchedCommits ?? 0) === 1 ? '' : 's'}, ` +
+    `${u.skippedEmptyCommits ?? 0} skipped empty\n`,
+  );
+}
+
+async function runCorrelate(values) {
+  if (values.pairs === undefined || values.pairs === '') {
+    console.error('error: correlate requires --pairs <file.csv|json>');
+    process.exit(1);
+  }
+  let pairs;
+  try {
+    pairs = await readPairsFile(values.pairs);
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    process.exit(1);
+  }
+  const result = correlateCostWithFeature(pairs);
+  if (values.csv !== undefined) await writeCsvPairs(values.csv, pairs, 'cost');
+
+  const payload = {
+    source: resolve(values.pairs),
+    n: result.n,
+    spearman: result.spearman,
+    pearsonLinear: result.pearsonLinear,
+    pearsonLogLog: result.pearsonLogLog,
+    pearsonLogLogDropped: result.pearsonLogLogDropped,
+    deciles: result.deciles,
+  };
+  if (values.json === true) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  printCorrelationReport(payload, { repoLabel: resolve(values.pairs) });
+}
+
+/* ------------------------------------------------------------------------- *
+ * helpers for cost-drivers / correlate
+ * ------------------------------------------------------------------------- */
+
+function pickMetric(raw) {
+  if (raw === undefined) return 'tokens';
+  if (!METRICS.includes(raw)) {
+    console.error(`error: --metric must be one of ${METRICS.join(', ')} (got "${raw}")`);
+    process.exit(1);
+  }
+  return raw;
+}
+
+function pickJoinBy(raw) {
+  if (raw === undefined) return 'issue';
+  if (!JOIN_BY_CHOICES.includes(raw)) {
+    console.error(`error: --join-by must be one of ${JOIN_BY_CHOICES.join(', ')} (got "${raw}")`);
+    process.exit(1);
+  }
+  return raw;
+}
+
+function parseRegexOption(raw, name) {
+  if (raw === undefined) return null;
+  try {
+    return new RegExp(raw);
+  } catch (err) {
+    console.error(`error: --${name} is not a valid regex: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+/** Accept either a plain ms integer or a suffixed duration: 30s, 2m, 1h, 3d. */
+function parseDurationMs(raw) {
+  if (raw === undefined) {
+    console.error("error: --join-by time requires --window (e.g. '30m', '2h', '1d', or a millisecond integer)");
+    process.exit(1);
+  }
+  const match = String(raw).trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
+  if (match === null) {
+    console.error(`error: --window must be a number with optional suffix ms/s/m/h/d (got "${raw}")`);
+    process.exit(1);
+  }
+  const value = Number(match[1]);
+  const unit = match[2] ?? 'ms';
+  const factor = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[unit];
+  return value * factor;
+}
+
+async function readPairsFile(path) {
+  const ext = extname(path).toLowerCase();
+  const text = await readFile(path, 'utf8');
+  if (ext === '.json') return parsePairsJson(text, path);
+  if (ext === '.csv') return parsePairsCsv(text, path);
+  // Fallback: sniff content.
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) return parsePairsJson(text, path);
+  return parsePairsCsv(text, path);
+}
+
+function parsePairsJson(text, path) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${path}: not valid JSON (${err.message})`);
+  }
+  if (!Array.isArray(data)) throw new Error(`${path}: expected an array of {feature, cost} objects`);
+  const out = [];
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    if (row === null || typeof row !== 'object') {
+      throw new Error(`${path}: row ${i} is not an object`);
+    }
+    const feature = Number(row.feature);
+    const cost = Number(row.cost);
+    if (!Number.isFinite(feature)) throw new Error(`${path}: row ${i} has non-numeric feature`);
+    if (!Number.isFinite(cost)) throw new Error(`${path}: row ${i} has non-numeric cost`);
+    const pair = { feature, cost };
+    if (typeof row.key === 'string') pair.key = row.key;
+    out.push(pair);
+  }
+  return out;
+}
+
+function parsePairsCsv(text, path) {
+  const lines = text.split(/\r?\n/).filter((l) => l !== '');
+  if (lines.length === 0) return [];
+  const header = splitCsvLine(lines[0]);
+  const featureIdx = header.findIndex((h) => h.toLowerCase() === 'feature');
+  const costIdx = header.findIndex((h) => h.toLowerCase() === 'cost');
+  const keyIdx = header.findIndex((h) => h.toLowerCase() === 'key');
+  if (featureIdx === -1 || costIdx === -1) {
+    throw new Error(`${path}: CSV must have header columns "feature" and "cost"`);
+  }
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const fields = splitCsvLine(lines[i]);
+    const feature = Number(fields[featureIdx]);
+    const cost = Number(fields[costIdx]);
+    if (!Number.isFinite(feature) || !Number.isFinite(cost)) continue;
+    const pair = { feature, cost };
+    if (keyIdx !== -1 && fields[keyIdx] !== undefined) pair.key = fields[keyIdx];
+    out.push(pair);
+  }
+  return out;
+}
+
+function splitCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i += 1; continue; }
+      if (ch === '"') { inQuotes = false; continue; }
+      cur += ch;
+      continue;
+    }
+    if (ch === '"') { inQuotes = true; continue; }
+    if (ch === ',') { out.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+async function writeCsvPairs(path, pairs, costLabel) {
+  const hasKeyCol = pairs.some((p) => typeof p.key === 'string');
+  const header = hasKeyCol ? `key,feature,${costLabel}` : `feature,${costLabel}`;
+  const rows = pairs.map((p) => {
+    const f = String(p.feature);
+    const c = String(p.cost);
+    if (!hasKeyCol) return `${f},${c}`;
+    return `${csvField(p.key ?? '')},${f},${c}`;
+  });
+  await writeFile(path, header + '\n' + rows.join('\n') + (rows.length > 0 ? '\n' : ''), 'utf8');
+}
+
+function csvField(value) {
+  const s = String(value);
+  if (/[",\r\n]/.test(s)) return `"${s.replaceAll('"', '""')}"`;
+  return s;
+}
+
+function printCorrelationReport(payload, { repoLabel }) {
+  const fmtCoef = (v) => (v === null ? '   —' : (v >= 0 ? ` ${v.toFixed(3)}` : v.toFixed(3)));
+  const fmtCost = (n) => {
+    if (!Number.isFinite(n)) return '   —';
+    if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return n.toFixed(n >= 100 || Number.isInteger(n) ? 0 : 2);
+  };
+  const fmtFeat = (n) => {
+    if (!Number.isFinite(n)) return '—';
+    if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return Number.isInteger(n) ? String(n) : n.toFixed(2);
+  };
+
+  const heading = payload.metric !== undefined
+    ? `COST DRIVERS  —  diff churn vs ${payload.metric}`
+    : `COST DRIVERS  —  external pairs`;
+
+  console.log(HEAD);
+  console.log(heading);
+  console.log(HEAD);
+  if (payload.joinBy !== undefined) console.log(`Join strategy:  ${payload.joinBy}`);
+  console.log(`Source:         ${repoLabel}`);
+  const unjoinedUsage = payload.unjoined?.usage?.length ?? 0;
+  const unjoinedDiffs = payload.unjoined?.diffs?.length ?? 0;
+  if (payload.joinBy !== undefined) {
+    console.log(
+      `n = ${payload.n} pair${payload.n === 1 ? '' : 's'}    ` +
+      `unjoined: ${unjoinedUsage} usage, ${unjoinedDiffs} diffs    ` +
+      `unmatched commits: ${payload.unmatchedCommits}`,
+    );
+  } else {
+    console.log(`n = ${payload.n} pair${payload.n === 1 ? '' : 's'}`);
+  }
+  console.log();
+
+  console.log('Correlations:');
+  console.log(`  Spearman          ${fmtCoef(payload.spearman)}`);
+  console.log(`  Pearson(linear)   ${fmtCoef(payload.pearsonLinear)}`);
+  const ll = payload.pearsonLogLogDropped > 0
+    ? `${fmtCoef(payload.pearsonLogLog)}  (${payload.pearsonLogLogDropped} pair${payload.pearsonLogLogDropped === 1 ? '' : 's'} dropped: non-positive)`
+    : fmtCoef(payload.pearsonLogLog);
+  console.log(`  Pearson(log-log)  ${ll}`);
+
+  if (payload.deciles.length === 0) {
+    console.log();
+    console.log('Decile table: not enough pairs.');
+    return;
+  }
+  console.log();
+  console.log('Decile table:');
+  console.log(
+    padRight('Decile', 7) +
+    '  ' + padRight('Feature range', 24) +
+    '  ' + padLeft('n', 4) +
+    '  ' + padLeft('Median cost', 12),
+  );
+  console.log(SEP);
+  for (let i = 0; i < payload.deciles.length; i++) {
+    const d = payload.deciles[i];
+    const range = `${fmtFeat(d.featureRange.min)} – ${fmtFeat(d.featureRange.max)}`;
+    console.log(
+      padRight(String(i + 1), 7) +
+      '  ' + padRight(range, 24) +
+      '  ' + padLeft(String(d.n), 4) +
+      '  ' + padLeft(fmtCost(d.medianCost), 12),
+    );
+  }
+
+  if (unjoinedUsage > 0 || unjoinedDiffs > 0) {
+    console.log();
+    console.log(
+      `Note: ${unjoinedUsage} usage key${unjoinedUsage === 1 ? '' : 's'} and ${unjoinedDiffs} diff key${unjoinedDiffs === 1 ? '' : 's'} did not join.`,
+    );
+  }
 }
 
 main().catch((err) => {
