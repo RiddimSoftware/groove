@@ -74,7 +74,13 @@ export {
   ratesForModel,
 } from './pricing.mjs';
 export { correlateCostWithFeature } from './correlate.mjs';
-export { readGitDiffs } from './git-diff-source.mjs';
+export {
+  DEFAULT_KEY_PATTERN,
+  LocalGitDiffSource,
+  parseGitNumstatLog,
+  readGitDiffResult,
+  readGitDiffs,
+} from './git-diff-source.mjs';
 export { joinCostWithFeature } from './cost-feature-join.mjs';
 
 /**
