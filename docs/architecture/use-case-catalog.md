@@ -31,3 +31,13 @@ Ports: DiffSource.
 Primary adapters: LocalGitDiffSource (`git log --numstat` via local `git`).
 Notes: adapter-only; it sees only locally-pulled history and depends on issue keys in commit subjects.
 Current implementation: `packages/llm-cost-attribution/src/git-diff-source.mjs`
+
+### CorrelateCostWithFeature
+Actor: Operator
+Goal: Given joined `{ feature, cost }` pairs, judge how strongly a feature (e.g. diff size, file count) predicts cost — reporting both rank and linear views so heavy-tailed cost data isn't misread under a single lens.
+Inputs: an iterable of FeatureCostPair `{ feature: number, cost: number }` (already joined upstream by JoinCostWithFeature — this module does not join).
+Outputs: CorrelationResult `{ n, spearman, pearsonLinear, pearsonLogLog, pearsonLogLogDropped, deciles }`. Spearman uses average-rank tie handling; log-log filters non-positive values and reports the dropped count. `deciles` is up to 10 buckets ordered by feature, each `{ n, featureRange, medianCost }`. Empty input, `n < 2`, and zero-variance series return explicit `null`s, never `NaN`.
+Entities / values: FeatureCostPair, CorrelationResult, DecileBucket.
+Ports: none — pure function over in-memory pairs.
+Primary adapters: none. Joining (DiffSource → FeatureCostPair) lives in JoinCostWithFeature.
+Current implementation: `packages/llm-cost-attribution/src/correlate.mjs`

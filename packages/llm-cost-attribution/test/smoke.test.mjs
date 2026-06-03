@@ -19,10 +19,6 @@ describe('llm-cost-attribution cost-drivers barrel', () => {
     assert.equal(typeof joinCostWithFeature, 'function');
   });
 
-  it('correlateCostWithFeature throws "not implemented"', async () => {
-    await assert.rejects(() => correlateCostWithFeature([]), /not implemented/);
-  });
-
   it('readGitDiffs can complete without records from an empty fixture', async () => {
     const gen = readGitDiffs('/fake/repo', { gitLogText: '' });
     const next = await gen.next();
