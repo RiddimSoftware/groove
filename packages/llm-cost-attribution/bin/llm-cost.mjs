@@ -1067,7 +1067,7 @@ function printCorrelationReport(payload, { repoLabel }) {
   };
 
   const heading = payload.metric !== undefined
-    ? `COST DRIVERS  —  diff churn vs ${payload.metric}`
+    ? `COST DRIVERS  —  diff size vs ${payload.metric}`
     : `COST DRIVERS  —  external pairs`;
 
   console.log(HEAD);
@@ -1102,12 +1102,13 @@ function printCorrelationReport(payload, { repoLabel }) {
     return;
   }
   console.log();
+  const medianLabel = payload.metric === 'turns' ? 'Median turns' : 'Median tokens';
   console.log('Decile table:');
   console.log(
     padRight('Decile', 7) +
-    '  ' + padRight('Feature range', 24) +
+    '  ' + padRight('Lines changed', 24) +
     '  ' + padLeft('n', 4) +
-    '  ' + padLeft('Median cost', 12),
+    '  ' + padLeft(medianLabel, 13),
   );
   console.log(SEP);
   for (let i = 0; i < payload.deciles.length; i++) {
@@ -1117,7 +1118,7 @@ function printCorrelationReport(payload, { repoLabel }) {
       padRight(String(i + 1), 7) +
       '  ' + padRight(range, 24) +
       '  ' + padLeft(String(d.n), 4) +
-      '  ' + padLeft(fmtCost(d.medianCost), 12),
+      '  ' + padLeft(fmtCost(d.medianCost), 13),
     );
   }
 
