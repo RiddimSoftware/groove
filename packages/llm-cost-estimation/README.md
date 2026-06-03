@@ -17,6 +17,15 @@ It looks at what past issues of a given size *actually* cost and forecasts the s
 
 It only *reads* telemetry and prints a forecast; it never modifies your usage records.
 
+## How good are the forecasts?
+
+Be skeptical: a forecast is only as trustworthy as the history behind its `{ size, model }` cell, and in practice that history is thin — especially early on.
+
+- **Most records carry no estimate.** Cost telemetry captures what an issue *spent*, but not its size; story-point estimates live in your tracker. Until they're joined onto the telemetry (`enrichUsageWithEstimate`) or stamped on when the work is dispatched, records have no `estimate` and can't be placed in any cell. A large telemetry file can still yield only a handful of usable issues.
+- **Splitting by size *and* model fragments** what little estimate-tagged history you have across many small cells.
+
+So expect small `n` and wide P50→P80 bands. **Treat the output as directional, not a budget** — useful for comparing relative cost between sizes or catching order-of-magnitude surprises, not for billing. Always read the printed `n` and `lowConfidence`; a single-digit `n` is a hint, not a number to plan against. The only thing that improves accuracy is more completed issues carrying estimates — no statistical trick manufactures signal the data doesn't have.
+
 ## Install
 
 ```bash
