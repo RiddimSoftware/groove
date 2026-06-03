@@ -94,6 +94,105 @@ llm-cost calibrate ~/backfill.out --seed 1 --holdout 0.2
 
 Read-only and local — the input is never written back or committed (point it at a gitignored file). Committed tests use only synthetic fixtures (`test/forecast-recovers-known-dist.test.mjs`).
 
+## What drives your cost? (`cost-drivers`)
+
+`cost-drivers` runs an end-to-end correlation analysis: it reads your LLM cost records, reads diff statistics from a local git repo, joins them by issue key, and prints Spearman rank correlation, linear Pearson, log-log Pearson, and a decile table. The goal is to understand which attributes of an issue predict how much it costs — using your own data, not anyone else's benchmarks.
+
+**Minimal inputs:** a local git repo whose commit subjects include issue keys, and transcripts (or a `usage.jsonl`) for the same issues.
+
+```bash
+llm-cost cost-drivers --repo ~/code/my-project
+llm-cost cost-drivers --repo ~/code/my-project --metric turns
+llm-cost cost-drivers --repo ~/code/my-project --from-usage ~/llm-cost-history.jsonl
+```
+
+Example readout (synthetic numbers — for illustration only):
+
+```
+════════════════════════════════════════════════════════════════════════
+COST DRIVERS  —  diff churn vs tokens
+════════════════════════════════════════════════════════════════════════
+Join strategy:  issue
+Source:         ~/code/my-project
+n = 42 pairs    unjoined: 3 usage, 5 diffs    unmatched commits: 11
+
+Correlations:
+  Spearman           0.34
+  Pearson(linear)    0.21
+  Pearson(log-log)   0.40
+
+Decile table:
+Decile   Feature range                n   Median cost
+────────────────────────────────────────────────────────────────────────
+1        14 – 87                      4        58.3K
+2        91 – 210                     4        72.1K
+3        215 – 380                    4        91.4K
+4        384 – 510                    4       103.2K
+5        512 – 740                    5       128.7K
+6        744 – 1.1K                   4       145.3K
+7        1.1K – 1.6K                  4       189.6K
+8        1.6K – 2.4K                  4       224.1K
+9        2.5K – 4.1K                  5       301.8K
+10       4.2K – 9.3K                  4       512.4K
+```
+
+Reading that block: **Feature range** is diff churn (additions + deletions) in lines; **Median cost** is the median token count for issues in that churn decile. The three correlation coefficients tell the same story from different angles — see "Reading the output" below.
+
+### Join model
+
+`cost-drivers` needs to know which cost record belongs to which diff. The `--join-by` flag selects the strategy:
+
+| Strategy | How it joins | When to use |
+|---|---|---|
+| `issue` (default) | Extracts issue keys (e.g. `ABC-123`) from commit subjects and from each cost record's `issueIdentifier` / workspace path | Works out of the box with Symphony's per-issue worktree convention and squash-merge commit messages |
+| `worktree` | Joins on the cost record's workspace path vs. the diff record's key | Useful when your diff records carry workspace paths instead of issue keys |
+| `time` | Attributes each cost record to the next commit within `--window` (e.g. `30m`, `2h`, `1d`) | Label-free fallback when commit subjects don't contain keys; inherently approximate |
+
+```bash
+# explicit strategies
+llm-cost cost-drivers --repo ~/code/my-project --join-by issue    # default
+llm-cost cost-drivers --repo ~/code/my-project --join-by worktree
+llm-cost cost-drivers --repo ~/code/my-project --join-by time --window 2h
+
+# override the key-extraction regex if your project uses a different format
+llm-cost cost-drivers --repo ~/code/my-project --key-pattern 'TICKET-\d+'
+```
+
+The `keyOfUsage`, `keyOfDiff`, and `join` overrides are available via the library API (`joinCostWithFeature`) for cases the CLI flags don't cover — for example joining on a custom field, or implementing a fully custom reconciliation.
+
+#### Escape hatch: join externally with `dump-* → correlate`
+
+If none of the built-in strategies fit, emit the two streams and join them yourself:
+
+```bash
+# 1. dump the cost stream
+llm-cost dump-usage > usage.jsonl
+
+# 2. dump the diff stream
+llm-cost dump-diffs --repo ~/code/my-project > diffs.jsonl
+
+# 3. join them however you like, then feed back a { feature, cost } CSV
+llm-cost correlate --pairs my-pairs.csv   # CSV: feature,cost[,key]
+```
+
+`correlate --pairs` accepts `.csv` (header `feature,cost`) or `.json` (array of `{feature, cost}` objects) and produces the same readout as `cost-drivers`.
+
+### Reading the output
+
+**Three correlation views, not one.** LLM cost is heavy-tailed — a handful of expensive issues can dominate a linear average. `cost-drivers` therefore reports:
+
+- **Spearman** (rank correlation): captures monotonic relationships without being skewed by outliers. If big issues generally cost more than small ones, Spearman will pick that up even when the raw values vary wildly.
+- **Pearson (linear)**: the standard linear correlation on raw values. On heavy-tailed data it can read near zero even when Spearman is meaningful; it is sensitive to a few extreme issues.
+- **Pearson (log-log)**: Pearson on log₁₀-transformed values, the right view when both axes span orders of magnitude. If cost and diff size both grow geometrically, this is the coefficient that captures it.
+
+A large gap between Spearman and linear Pearson is a signal that the relationship is real but nonlinear or that a few outliers are suppressing the linear view — not that the relationship is absent.
+
+**Always check `n`.** With a small sample (say n < 20) the coefficients are unreliable and the decile table will have very few rows per bucket. Treat the output as directional until you have more history.
+
+**Diff size is output, not effort.** A feature that happens to touch many files will show high churn whether or not it was the most complex work. Churn is the most readily available proxy; other features (issue estimate, turn count) may or may not track cost better on your workload.
+
+**Local-git limits.** `readGitDiffs` only sees commits already in your local checkout — run `git fetch` or `git pull` first if you want remote-only commits. For the default `issue` strategy, commits must also carry issue keys in their subjects (the default pattern matches `ABC-123`-style keys; override with `--key-pattern`).
+
 ## Library
 
 ```js
