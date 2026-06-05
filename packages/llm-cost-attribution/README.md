@@ -210,6 +210,36 @@ const result  = await backfillUsageFromTranscripts({ outFile: '/tmp/usage.jsonl'
 
 Pass `{ cwdPattern, claudeProjectsDir, codexSessionsDir }` to override defaults.
 
+### Bring your own sources and sinks
+
+The wrappers above read local Claude/Codex transcripts. If your sessions or usage
+records live somewhere else (a database, an HTTP API, a test fixture), wire your
+own ports into `createAttributionWorkflow` instead — the same core workflows, with
+no filesystem assumptions:
+
+```js
+import { createAttributionWorkflow } from 'llm-cost-attribution';
+
+const attribution = createAttributionWorkflow({
+  sessionSource:     { async *listSessions() { /* yield ParsedSession objects */ } },
+  issueMatcher:      { issueIdentifierForSession: (s) => /* 'EPAC-1940' | null */,
+                       worktreePathForSession:    (s) => s.cwd },
+  usageRecordSource: { async *readUsageRecords() { /* yield usage.jsonl records */ } },
+  usageRecordSink:   { async writeUsageRecords(records) { /* persist them */ } },
+});
+
+await attribution.computeIssueCost('EPAC-1940');          // from sessions
+await attribution.computeWorktreeCost('/path/to/worktree');
+await attribution.computeIssueCostFromUsage('EPAC-1940'); // from usage records
+await attribution.backfillUsage();                        // sessions → sink
+```
+
+The four ports are `SessionSource`, `IssueMatcher`, `UsageRecordSource`, and
+`UsageRecordSink` (see `src/attribution-ports.mjs`). The real transcript/usage
+adapters are also exported (`transcriptSessionSource`, `cwdIssueMatcher`,
+`usageJsonlRecordSource`, `appendingUsageRecordSink`) if you want the built-in
+sources with a custom workflow. Only supply the ports a given call needs.
+
 ### Diff-size feature records
 
 `readGitDiffs(repoPath, { revRange, keyPattern })` reads local `git log --numstat`
