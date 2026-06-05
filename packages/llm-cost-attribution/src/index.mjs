@@ -6,8 +6,7 @@
  * (bin/llm-cost.mjs).
  */
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
-import { rollupSessions } from './aggregator.mjs';
+import { join } from 'node:path';
 import { forecastIssueCost as forecastIssueCostCore } from './forecast.mjs';
 import { DEFAULT_CWD_PATTERN, issueFromClaudeProjectDirName, issueFromCwd } from './issue-pattern.mjs';
 import { calculateCost } from './pricing.mjs';
@@ -15,8 +14,13 @@ import { findWindow } from './quota.mjs';
 import { findClaudeProjectDirs, listJsonlsRecursively, parseClaudeSession } from './transcripts/claude.mjs';
 import { listCodexRollouts, parseCodexSession } from './transcripts/codex.mjs';
 import { sessionToUsageRecords } from './transcript-to-usage.mjs';
-import { appendUsageRecords, readUsageRecords, validateUsageRecord } from './usage-jsonl.mjs';
-import { rollupUsageRecords } from './usage-aggregator.mjs';
+import { appendUsageRecords } from './usage-jsonl.mjs';
+import { createAttributionWorkflow } from './attribution-workflow.mjs';
+import {
+  issueScopedTranscriptSessionSource,
+  worktreeScopedTranscriptSessionSource,
+  usageJsonlRecordSource,
+} from './attribution-adapters.mjs';
 
 export { DEFAULT_CWD_PATTERN, issueFromCwd, issueFromClaudeProjectDirName } from './issue-pattern.mjs';
 export { rollupSessions } from './aggregator.mjs';
@@ -82,6 +86,22 @@ export {
   readGitDiffs,
 } from './git-diff-source.mjs';
 export { joinCostWithFeature, BUILTIN_JOIN_STRATEGIES } from './cost-feature-join.mjs';
+export {
+  createAttributionWorkflow,
+  computeIssueCostFromSessions,
+  computeWorktreeCostFromSessions,
+  computeIssueCostFromUsageRecords,
+  iterateUsageFromSessions,
+  backfillUsageThroughSink,
+} from './attribution-workflow.mjs';
+export {
+  cwdIssueMatcher,
+  transcriptSessionSource,
+  issueScopedTranscriptSessionSource,
+  worktreeScopedTranscriptSessionSource,
+  usageJsonlRecordSource,
+  appendingUsageRecordSink,
+} from './attribution-adapters.mjs';
 
 /**
  * Default `PricingTable` adapter for `forecastIssueCost`. Delegates to
@@ -149,35 +169,15 @@ export function forecastIssueCost(featureRecord, usageSource = [], options = {})
  */
 export async function computeIssueCost(issueIdentifier, options = {}) {
   const cwdPattern = options.cwdPattern ?? DEFAULT_CWD_PATTERN;
-  const claudeRootDir = options.claudeProjectsDir ?? join(homedir(), '.claude', 'projects');
-  const codexRootDir = options.codexSessionsDir ?? join(homedir(), '.codex', 'sessions');
-  const onProgress = options.onProgress ?? (() => undefined);
-
-  const sessions = [];
-
-  // Claude: directory-name match.
-  const matchingProjectDirs = await findClaudeProjectDirs(
-    claudeRootDir,
-    (encoded) => issueFromClaudeProjectDirName(encoded, cwdPattern) === issueIdentifier,
-  );
-  for (const dir of matchingProjectDirs) {
-    for (const file of await listJsonlsRecursively(dir)) {
-      const session = await parseClaudeSession(file);
-      if (session !== null) sessions.push(session);
-    }
-  }
-
-  // Codex: session_meta.cwd match, scanned across all rollouts.
-  const codexFiles = await listCodexRollouts(codexRootDir);
-  for (let i = 0; i < codexFiles.length; i++) {
-    const session = await parseCodexSession(codexFiles[i]);
-    if (session !== null && issueFromCwd(session.cwd, cwdPattern) === issueIdentifier) {
-      sessions.push(session);
-    }
-    onProgress({ phase: 'codex', processed: i + 1, total: codexFiles.length });
-  }
-
-  return rollupSessions(issueIdentifier, sessions);
+  const sessionSource = issueScopedTranscriptSessionSource(issueIdentifier, { ...options, cwdPattern });
+  // The source is already scoped to this issue (Claude by encoded dir name,
+  // Codex by cwd), so attribute every session it yields to `issueIdentifier`
+  // rather than re-deriving it — preserving the wrapper's historical matching.
+  const issueMatcher = {
+    issueIdentifierForSession: () => issueIdentifier,
+    worktreePathForSession: (session) => session.cwd ?? '',
+  };
+  return createAttributionWorkflow({ sessionSource, issueMatcher }).computeIssueCost(issueIdentifier);
 }
 
 /**
@@ -192,32 +192,14 @@ export async function computeIssueCost(issueIdentifier, options = {}) {
  * @param {string} [options.codexSessionsDir]   Override `~/.codex/sessions`.
  */
 export async function computeWorktreeCost(worktreePath, options = {}) {
-  const claudeRootDir = options.claudeProjectsDir ?? join(homedir(), '.claude', 'projects');
-  const codexRootDir = options.codexSessionsDir ?? join(homedir(), '.codex', 'sessions');
-  const onProgress = options.onProgress ?? (() => undefined);
-
-  const sessions = [];
-
-  // Claude: the project directory name is the absolute cwd with every `/` and
-  // `.` replaced by `-`. Look it up directly — no regex needed.
-  const encodedPath = worktreePath.replace(/[/.]/g, '-');
-  const claudeProjectDir = join(claudeRootDir, encodedPath);
-  const claudeFiles = await listJsonlsRecursively(claudeProjectDir);
-  for (let i = 0; i < claudeFiles.length; i++) {
-    const session = await parseClaudeSession(claudeFiles[i]);
-    if (session !== null) sessions.push(session);
-    onProgress({ phase: 'claude', processed: i + 1, total: claudeFiles.length });
-  }
-
-  // Codex: scan all rollouts, keep those whose session_meta.cwd matches exactly.
-  const codexFiles = await listCodexRollouts(codexRootDir);
-  for (let i = 0; i < codexFiles.length; i++) {
-    const session = await parseCodexSession(codexFiles[i]);
-    if (session !== null && session.cwd === worktreePath) sessions.push(session);
-    onProgress({ phase: 'codex', processed: i + 1, total: codexFiles.length });
-  }
-
-  return rollupSessions(basename(worktreePath), sessions);
+  const sessionSource = worktreeScopedTranscriptSessionSource(worktreePath, options);
+  // The source is already scoped to this worktree path, so place every session
+  // it yields at `worktreePath`. The core labels the rollup with the basename.
+  const issueMatcher = {
+    issueIdentifierForSession: () => null,
+    worktreePathForSession: () => worktreePath,
+  };
+  return createAttributionWorkflow({ sessionSource, issueMatcher }).computeWorktreeCost(worktreePath);
 }
 
 /**
@@ -232,12 +214,8 @@ export async function computeWorktreeCost(worktreePath, options = {}) {
  * @param {string} usageSource  A .jsonl file or a directory of `usage*.jsonl` files.
  */
 export async function computeIssueCostFromUsage(issueIdentifier, usageSource) {
-  const records = [];
-  for await (const rec of readUsageRecords(usageSource)) {
-    if (validateUsageRecord(rec) !== null) continue;
-    records.push(rec);
-  }
-  return rollupUsageRecords(issueIdentifier, records);
+  const usageRecordSource = usageJsonlRecordSource(usageSource);
+  return createAttributionWorkflow({ usageRecordSource }).computeIssueCostFromUsage(issueIdentifier);
 }
 
 /**

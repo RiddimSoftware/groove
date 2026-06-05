@@ -52,3 +52,54 @@ Entities / values: FeatureCostPair, CorrelationResult, DecileBucket.
 Ports: none — pure function over in-memory pairs.
 Primary adapters: none. Joining (DiffSource → FeatureCostPair) lives in JoinCostWithFeature.
 Current implementation: `packages/llm-cost-attribution/src/correlate.mjs`
+
+### ComputeIssueCost
+Actor: Operator
+Goal: Roll up token/turn/quota cost for one issue from caller-supplied sessions, without assuming the data came from local Claude/Codex transcript directories.
+Inputs: an `issueIdentifier`, a `SessionSource` (yields ParsedSessions), and an `IssueMatcher` (maps each session to an issue).
+Outputs: IssueRollup `{ issueIdentifier, providerTotals, combinedTokens, combinedTurns, combinedSessions }`.
+Entities / values: ParsedSession, IssueRollup.
+Ports: SessionSource, IssueMatcher.
+Primary adapters: Claude/Codex transcript readers behind `issueScopedTranscriptSessionSource` + `cwdIssueMatcher`; in-memory sources in tests. The `computeIssueCost` convenience wrapper wires the transcript adapters at the edge.
+Notes: pure core — imports no filesystem/transcript/usage-JSONL/CLI/HTTP/Linear/child_process (enforced by `npm run test:boundary` and the project-acceptance boundary check).
+Current implementation: `packages/llm-cost-attribution/src/attribution-workflow.mjs` (`computeIssueCostFromSessions`, `createAttributionWorkflow`)
+
+### ComputeWorktreeCost
+Actor: Operator
+Goal: Roll up cost for every session run from one worktree directory, regardless of any issue identifier, from caller-supplied sessions.
+Inputs: a `worktreePath`, a `SessionSource`, and an `IssueMatcher` (places each session at a worktree path).
+Outputs: IssueRollup labelled with the worktree basename.
+Entities / values: ParsedSession, IssueRollup.
+Ports: SessionSource, IssueMatcher.
+Primary adapters: `worktreeScopedTranscriptSessionSource` over the Claude/Codex transcript readers; in-memory sources in tests. The `computeWorktreeCost` convenience wrapper wires the transcript adapters at the edge.
+Current implementation: `packages/llm-cost-attribution/src/attribution-workflow.mjs` (`computeWorktreeCostFromSessions`)
+
+### IterateUsageFromSessions
+Actor: Operator
+Goal: Stream spec-compliant usage.jsonl records derived from caller-supplied sessions, one per turn, for downstream consumers (dump-usage, in-process correlation) — without writing them anywhere.
+Inputs: a `SessionSource`, an `IssueMatcher`, and an optional `recordedAt`.
+Outputs: an async stream of UsageRecords; the generator returns a `{ recordsYielded, sessionsProcessed, sessionsSkipped }` summary.
+Entities / values: ParsedSession, UsageRecord.
+Ports: SessionSource, IssueMatcher.
+Primary adapters: transcript readers behind `transcriptSessionSource` + `cwdIssueMatcher`; the `iterateUsageFromTranscripts` convenience wrapper wires them at the edge. Record shaping reuses `sessionToUsageRecords`.
+Current implementation: `packages/llm-cost-attribution/src/attribution-workflow.mjs` (`iterateUsageFromSessions`)
+
+### BackfillUsage
+Actor: Operator
+Goal: Derive spec-compliant usage records from caller-supplied sessions and persist them through a sink, so the source transcripts can be deleted while the cost rollups remain reproducible.
+Inputs: a `SessionSource`, an `IssueMatcher`, a `UsageRecordSink`, and an optional `recordedAt`.
+Outputs: UsageBackfillSummary `{ recordsWritten, sessionsProcessed, sessionsSkipped }`; records delivered to the sink in per-session batches.
+Entities / values: ParsedSession, UsageRecord, UsageBackfillSummary.
+Ports: SessionSource, IssueMatcher, UsageRecordSink.
+Primary adapters: transcript readers behind `transcriptSessionSource`; `appendingUsageRecordSink` over the usage-JSONL writer; in-memory sink in tests. Core writes through `UsageRecordSink` and never calls the filesystem JSONL writer directly.
+Current implementation: `packages/llm-cost-attribution/src/attribution-workflow.mjs` (`backfillUsageThroughSink`)
+
+### ComputeIssueCostFromUsage
+Actor: Operator
+Goal: Roll up cost for one issue from previously-recorded usage.jsonl records instead of raw transcripts.
+Inputs: an `issueIdentifier` and a `UsageRecordSource` (yields UsageRecords).
+Outputs: IssueRollup.
+Entities / values: UsageRecord, IssueRollup.
+Ports: UsageRecordSource.
+Primary adapters: `usageJsonlRecordSource` over the usage-JSONL reader (drops malformed lines); in-memory sources in tests. The `computeIssueCostFromUsage` convenience wrapper wires the reader at the edge.
+Current implementation: `packages/llm-cost-attribution/src/attribution-workflow.mjs` (`computeIssueCostFromUsageRecords`)

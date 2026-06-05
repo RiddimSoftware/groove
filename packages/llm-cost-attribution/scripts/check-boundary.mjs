@@ -14,6 +14,8 @@ export const BOUNDARY_CONFIG = {
     'src/enrich.mjs',
     'src/correlate.mjs',
     'src/cost-feature-join.mjs',
+    'src/attribution-ports.mjs',
+    'src/attribution-workflow.mjs',
   ],
   adapterModules: [
     { path: 'src/linear-estimate-source.mjs', kind: 'Linear adapter' },
@@ -21,6 +23,7 @@ export const BOUNDARY_CONFIG = {
     { path: 'src/quota.mjs', kind: 'quota adapter/access point' },
     { path: 'src/transcripts/', kind: 'transcript filesystem adapter' },
     { path: 'src/usage-jsonl.mjs', kind: 'usage JSONL filesystem adapter' },
+    { path: 'src/attribution-adapters.mjs', kind: 'attribution transcript/usage adapter' },
     { path: 'src/util.mjs', kind: 'filesystem utility adapter' },
     { path: 'src/git-diff-source.mjs', kind: 'local-git diff adapter' },
     { path: 'bin/', kind: 'CLI adapter' },
