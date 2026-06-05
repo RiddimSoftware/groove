@@ -155,6 +155,118 @@ or below the predicted P80 about 80% of the time? Re-exported from
 `calibrate` was a never-implemented placeholder. It now throws an error naming
 its replacement, `calibrateCoverage` (above). Do not use it.
 
+### Use cases and extension ports
+
+The package is structured around named application-layer use cases — each one with declared ports you can inject (a custom estimate source, a custom usage source, an alternate pricing or quota model). The estimation core stays key-free and tracker-agnostic; only the ports talk to Linear, your filesystem, or your pricing service. The full per-use-case contract lives in [`docs/use-cases.md`](docs/use-cases.md).
+
+| Use case | What it does for callers | Extension ports |
+|---|---|---|
+| `EnrichUsageWithEstimate` | Stamp the spec's optional `estimate` field onto estimate-free usage records by joining each record's issue to its story-point estimate. Pure transform — no Linear SDK in the core. | `LinearEstimateSource` (`resolveEstimates(ids)` → `Map<id, number\|null>`) |
+| `ForecastIssueCost` | Forecast tokens / turns / dollars / Codex quota P50–P80 for a `{ size, model }` cell from estimate-tagged usage records. Re-exported from [`llm-cost-attribution`](../llm-cost-attribution). | `EstimateTaggedUsageSource`, `PricingTable`, `QuotaModel` |
+| `ForecastProjectCost` | Forecast a project total by Monte Carlo convolution over per-issue cells, so summed quantiles don't over-state tail risk. Re-exported from [`llm-cost-attribution`](../llm-cost-attribution). | `EstimateTaggedUsageSource`, `PricingTable` |
+| `CalibrateCoverage` | Backtest the forecaster: on held-out issues, does actual cost really land at or below the predicted P80? Re-exported from [`llm-cost-attribution`](../llm-cost-attribution). | `EstimateTaggedUsageSource` |
+
+### Inject a custom estimate source
+
+`enrichUsageWithEstimate` depends only on the `LinearEstimateSource` port — not the bundled GraphQL adapter — so any implementation of `resolveEstimates(ids)` slots in. That makes tests, alternate trackers, and in-memory fixtures trivial without an `LINEAR_API_TOKEN`.
+
+```js
+import { enrichUsageWithEstimate } from 'llm-cost-estimation';
+
+// A synthetic, fully in-memory estimate source — no network, no API key.
+function inMemoryEstimateSource(estimatesById) {
+  return {
+    async resolveEstimates(ids) {
+      const out = new Map();
+      for (const id of ids) {
+        out.set(id, Object.hasOwn(estimatesById, id) ? estimatesById[id] : null);
+      }
+      return out;
+    },
+  };
+}
+
+const records = [
+  { schemaVersion: 1, issueIdentifier: 'EPAC-1999', provider: 'claude',
+    model: 'claude-sonnet-4-6', /* … other spec §5.1 fields … */ },
+  { schemaVersion: 1, issueIdentifier: 'EPAC-2000', provider: 'claude',
+    model: 'claude-sonnet-4-6', /* … */ },
+];
+
+const source = inMemoryEstimateSource({ 'EPAC-1999': 4, 'EPAC-2000': null });
+
+const { records: enriched, unresolved, stats } = await enrichUsageWithEstimate(records, source);
+// enriched[0].estimate === 4
+// estimate stays absent (never 0) on the unresolved record
+// unresolved === ['EPAC-2000']
+```
+
+For the production path, `createLinearEstimateSource()` returns the same port shape backed by the Linear GraphQL API. It also accepts an injected `fetch` so contract tests can swap it out without touching the network.
+
+### Inject a custom usage source
+
+`forecastIssueCost`, `forecastProjectCost`, and `calibrateCoverage` are re-exported from `llm-cost-attribution`, so they all accept the same usage-source port: any iterable, async iterable, or object exposing `records()`/`iterate()`. That lets a forecast read from an in-memory array, a database stream, or a synthetic generator — no `usage.jsonl` on disk required.
+
+```js
+import { forecastIssueCost } from 'llm-cost-estimation';
+import { syntheticUsageRecords } from 'llm-cost-attribution';
+
+// 50 estimate-tagged records with a known log-normal distribution.
+const records = syntheticUsageRecords({
+  p50: 1_000_000, p80: 1_800_000,
+  n: 50, seed: 1,
+  size: 'L', model: 'claude-sonnet-4-6',
+});
+
+const forecast = await forecastIssueCost(
+  { size: 'L', model: 'claude-sonnet-4-6' },
+  records,
+);
+```
+
+The same source object can be enriched first and forecast second, with no filesystem in between:
+
+```js
+const { records: enriched } = await enrichUsageWithEstimate(rawRecords, source);
+await forecastIssueCost({ size: 'L', model: 'claude-sonnet-4-6' }, enriched);
+```
+
+### Inject a custom pricing or quota model
+
+The `PricingTable` and `QuotaModel` ports come from `llm-cost-attribution`'s forecaster; pass them through `forecastIssueCost`'s options for an alternate provider or a flat-rate analysis:
+
+```js
+import { forecastIssueCost } from 'llm-cost-estimation';
+
+// `buckets` is the spec §5.2.3 TokenBuckets shape; sum them and apply a flat rate.
+const flatRatePricing = {
+  priceFor(_model, buckets) {
+    const total =
+      buckets.inputUncached + buckets.inputCached +
+      buckets.cacheCreate5m + buckets.cacheCreate1h +
+      buckets.outputVisible + buckets.outputReasoning;
+    return total * 0.000_002;
+  },
+};
+
+await forecastIssueCost(
+  { size: 'L', model: 'flat-rate-1' },
+  enriched,
+  { pricingTable: flatRatePricing },
+);
+```
+
+`forecastProjectCost` reads the same `PricingTable` through its `options.pricingTable`.
+
+### Ready vs. planned APIs
+
+| Status | Surface |
+|---|---|
+| Ready | `enrichUsageWithEstimate`, `isValidEstimate`, `createLinearEstimateSource`, `forecastIssueCost` (re-export), `forecastProjectCost` (re-export), `calibrateCoverage` (re-export) |
+| Deprecated | `calibrate` — never implemented; throws naming `calibrateCoverage` as its replacement. Not imported in any of the ready examples above. |
+
+The package has no planned-but-unimplemented public surface today; every export listed as Ready is wired through and tested.
+
 ## What it doesn't do
 
 - It does **not** infer estimates from issue titles, paths, or code signals.

@@ -255,6 +255,123 @@ It is local-first: no GitHub token, network, or API calls. The tradeoff is that 
 sees only history already present in the checkout, and commits must carry issue
 keys in their subjects, as with squash-merge subjects like `[ABC-12]: add widget`.
 
+### Use cases and extension ports
+
+Beyond the rollup workflows above, the package surfaces a second tier of named application-layer use cases for forecasting and correlation. Each one declares its own ports so callers can inject custom data, alternate pricing, or their own quota model without touching the core. The full per-use-case contract — including the rollup-style `ComputeIssueCost` / `BackfillUsage` / `CreateAttributionWorkflow` group already covered above — lives in [`docs/architecture/use-case-catalog.md`](../../docs/architecture/use-case-catalog.md).
+
+| Use case | What it does for callers | Extension ports |
+|---|---|---|
+| `ForecastIssueCost` | Forecast tokens / turns / dollars / Codex quota P50–P80 for a `{ size, model }` cell from past records, before work starts. | `EstimateTaggedUsageSource`, `PricingTable`, `QuotaModel` |
+| `ForecastProjectCost` | Forecast a project total by Monte Carlo convolution over per-issue cells, so summed quantiles don't over-state tail risk. Tokens / turns / dollars only — quota and wall-clock don't sum. | per-cell sampler (`collectCellSamples`), `PricingTable` |
+| `JoinCostWithFeature` | Tie a chunk of cost to a chunk of code change without hard-wiring any one org's workflow. Produces `{ feature, cost }` pairs ready for `correlateCostWithFeature`. | `CostFeatureJoiner` (`issue-key`, `worktree`, `time`, or a caller `keyOfUsage`/`keyOfDiff`/full `join`), `DiffSource` |
+| `ReadGitDiffs` | Read per-issue diff sizes from local git history without GitHub access; implements the `DiffSource` port for `JoinCostWithFeature`. | adapter only — no inward ports |
+| `CorrelateCostWithFeature` | Judge how strongly a feature (diff churn, file count, …) predicts cost via Spearman, linear Pearson, log-log Pearson, and a decile table. | none — pure function over `{ feature, cost }` pairs |
+
+### Inject a custom usage source
+
+`forecastIssueCost`, `forecastProjectCost`, and the join helpers all accept any iterable, async iterable, or object exposing `records()` / `iterate()` for their cost input. That lets you forecast straight from an in-memory array, a database stream, or a synthetic generator — no `~/.claude/projects` / `~/.codex/sessions` reads, no API tokens.
+
+```js
+import { forecastIssueCost, syntheticUsageRecords } from 'llm-cost-attribution';
+
+// 50 spec-shaped records with a known log-normal P50/P80 distribution.
+const records = syntheticUsageRecords({
+  p50: 1_000_000, p80: 1_800_000,
+  n: 50, seed: 1,
+  size: 'L', model: 'claude-sonnet-4-6',
+});
+
+const forecast = await forecastIssueCost(
+  { size: 'L', model: 'claude-sonnet-4-6' },
+  records,
+);
+// → { tokens: { p50, p80, n: 50 }, turns, dollars, quota, lowConfidence, empty }
+```
+
+Any object exposing `records()` works too — useful when wrapping a query, a stream, or a fixture loader:
+
+```js
+const inMemorySource = {
+  async *records() {
+    for (const record of myDataset) yield record;
+  },
+};
+await forecastIssueCost({ size: 'M', model: 'claude-sonnet-4-6' }, inMemorySource);
+```
+
+The same `inMemorySource` shape is what `joinCostWithFeature({ usage, diffs })` consumes for its `usage` argument, so a single custom source feeds both the forecaster and the correlator.
+
+### Inject a custom pricing or quota model
+
+The `PricingTable` and `QuotaModel` ports are injected through `forecastIssueCost`'s options. The library defaults (`DEFAULT_PRICING_TABLE`, `DEFAULT_QUOTA_MODEL`) wrap `pricing.mjs` and `quota.mjs`; substitute your own for an alternate provider, an enterprise rate card, or a synthetic test.
+
+```js
+import { forecastIssueCost } from 'llm-cost-attribution';
+
+// Flat-rate $2 per million tokens, regardless of bucket split.
+// `buckets` is the spec §5.2.3 TokenBuckets shape:
+// { inputUncached, inputCached, cacheCreate5m, cacheCreate1h, outputVisible, outputReasoning }.
+const flatRatePricing = {
+  priceFor(_model, buckets) {
+    const total =
+      buckets.inputUncached + buckets.inputCached +
+      buckets.cacheCreate5m + buckets.cacheCreate1h +
+      buckets.outputVisible + buckets.outputReasoning;
+    return total * 0.000_002;
+  },
+};
+
+// Treat each issue's wall-clock as a fraction of a 5-minute SLO budget.
+const sloQuotaModel = {
+  quotaFractionFor(record) {
+    const elapsedMs = Date.parse(record.endedAt) - Date.parse(record.startedAt);
+    return elapsedMs / (5 * 60 * 1000);
+  },
+};
+
+await forecastIssueCost(
+  { size: 'L', model: 'flat-rate-1' },
+  records,
+  { pricingTable: flatRatePricing, quotaModel: sloQuotaModel },
+);
+```
+
+`forecastProjectCost` takes the same `PricingTable` so a project rollup quotes dollars off whichever rate card you injected per-issue.
+
+### Compose `JoinCostWithFeature` with `correlateCostWithFeature`
+
+The pluggable join produces `{ key, feature, cost: { tokens, turns } }` pairs; the correlator consumes `{ feature, cost }` after picking a single metric:
+
+```js
+import {
+  joinCostWithFeature,
+  correlateCostWithFeature,
+  readUsageRecords,
+  readGitDiffs,
+} from 'llm-cost-attribution';
+
+const usage = readUsageRecords('./usage.jsonl');
+const diffs = readGitDiffs('./my-repo');
+
+const { pairs, unjoined } = await joinCostWithFeature({
+  usage,
+  diffs,
+  strategy: 'issue-key',          // or 'worktree' | 'time'
+});
+
+const tokenPairs = pairs.map((p) => ({ feature: p.feature, cost: p.cost.tokens }));
+const result = correlateCostWithFeature(tokenPairs);
+// → { n, spearman, pearsonLinear, pearsonLogLog, pearsonLogLogDropped, deciles }
+```
+
+For workflows the built-in strategies don't cover, supply a caller-defined `keyOfUsage` / `keyOfDiff` (custom-key join) or a full `join(usage, diffs) → pairs` (escape hatch). Both replace the strategy entirely and are validated against the `{ feature, cost: { tokens, turns } }` contract.
+
+### Ready vs. planned APIs
+
+Every export named in the use-case table above is implemented and stable, as are the rollup workflows reached through `createAttributionWorkflow`. The package has no planned, unsupported, or deprecated public APIs in this release — story-point–aware enrichment lives in the sibling [`llm-cost-estimation`](../llm-cost-estimation) package, which re-exports `forecastIssueCost`, `forecastProjectCost`, and `calibrateCoverage` and feeds them through the same `EstimateTaggedUsageSource` / `PricingTable` / `QuotaModel` ports rather than reaching across package boundaries.
+
+The convenience wrappers shipped with this package (`computeIssueCost`, `backfillUsageFromTranscripts`, `iterateUsageFromTranscripts`) still read `~/.claude/projects` / `~/.codex/sessions` locally and make no network call — no API tokens, no telemetry pipeline. Custom-port workflows are opt-in; the transcript and `usage.jsonl` paths stay key-free.
+
 ## What it doesn't (and can't) do
 
 - **Story-point estimates** — live in your tracker, not the transcripts (see the sibling `llm-cost-estimation`).
