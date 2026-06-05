@@ -150,11 +150,6 @@ or below the predicted P80 about 80% of the time? Re-exported from
 - Returns a per-cell and overall coverage report; cells whose coverage drifts
   from the target band beyond `deviationThreshold` are flagged.
 
-### `calibrate` — deprecated
-
-`calibrate` was a never-implemented placeholder. It now throws an error naming
-its replacement, `calibrateCoverage` (above). Do not use it.
-
 ### Use cases and extension ports
 
 The package is structured around named application-layer use cases — each one with declared ports you can inject (a custom estimate source, a custom usage source, an alternate pricing or quota model). The estimation core stays key-free and tracker-agnostic; only the ports talk to Linear, your filesystem, or your pricing service. The full per-use-case contract lives in [`docs/use-cases.md`](docs/use-cases.md).
