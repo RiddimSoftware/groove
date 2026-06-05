@@ -99,8 +99,8 @@ llm-cost-estimate --size 3 --model claude-sonnet-4-6 --from-usage ./usage.jsonl 
 import {
   forecastIssueCost,
   forecastProjectCost,
+  calibrateCoverage,
   enrichUsageWithEstimate,
-  calibrate,
   createLinearEstimateSource,
 } from 'llm-cost-estimation';
 ```
@@ -122,15 +122,38 @@ Core transform for adding estimates to usage telemetry.
 - Returns `{ records, unresolved, stats }`.
 - Issues with no estimate are left untouched and listed in `unresolved`.
 
-### `forecastProjectCost(projectId, issues, options?)`
+### `forecastProjectCost(issues, usageSource?, options?)`
 
-Public API placeholder for project rollups.
-Throws `Error('not implemented')` until the next sequencing issue lands.
+Forecast a whole project's cost by Monte Carlo convolution over its planned
+issues. Re-exported from [`llm-cost-attribution`](../llm-cost-attribution).
 
-### `calibrate(completedIssues, options?)`
+- `issues` is an array of `{ size, model }` plans — one per planned issue, the
+  same cell model `forecastIssueCost` reads.
+- `usageSource` is estimate-tagged usage records (the project's history).
+- `options` accepts `{ iterations, seed, minSampleSize, pricingTable }`.
+- Returns tokens / turns / (priced) dollars channels — each with P50, P80,
+  `mean`, `variance` — plus `iterations`, `seed`, `issues`, `lowConfidence`, and
+  `empty`.
 
-Public API placeholder for empirical calibration from completed work.
-Throws `Error('not implemented')` until the next sequencing issue lands.
+Summing per-issue P80s over-estimates a project total because tail risks partly
+diversify; the convolution corrects for that. Project-level **quota** is not
+forecast — quota is a per-issue windowed quantity that doesn't sum.
+
+### `calibrateCoverage(records, options?)`
+
+Backtest the forecaster: on held-out issues, does the actual cost really land at
+or below the predicted P80 about 80% of the time? Re-exported from
+[`llm-cost-attribution`](../llm-cost-attribution).
+
+- `records` are estimate-tagged usage records.
+- `options` accepts `{ seed, holdoutFraction, quantile, deviationThreshold, minHoldout, minTrain }`.
+- Returns a per-cell and overall coverage report; cells whose coverage drifts
+  from the target band beyond `deviationThreshold` are flagged.
+
+### `calibrate` — deprecated
+
+`calibrate` was a never-implemented placeholder. It now throws an error naming
+its replacement, `calibrateCoverage` (above). Do not use it.
 
 ## What it doesn't do
 

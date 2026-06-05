@@ -1,9 +1,10 @@
 /**
  * Public API for `llm-cost-estimation`.
  *
- * Implemented exports are re-exported from their sub-modules; the remaining
- * stubs throw until their implementing issue lands. Import from this barrel —
- * do not import from sub-modules directly.
+ * Every shipped export is implemented here or re-exported from
+ * `llm-cost-attribution`, which owns the forecaster, project forecaster, and
+ * coverage backtester. Import from this barrel — do not import from sub-modules
+ * directly.
  */
 
 /**
@@ -25,31 +26,49 @@ export { createLinearEstimateSource } from './linear-estimate-source.mjs';
  * cell from a set of estimate-tagged usage records. Re-exported from
  * `llm-cost-attribution`, which owns the empirical-quantile forecaster and
  * its `PricingTable` / `QuotaModel` adapters.
+ *
+ * Signature: `forecastIssueCost(cell, records, options?)` where `cell` is
+ * `{ size, model }` and `records` are estimate-tagged usage records.
  */
 export { forecastIssueCost } from 'llm-cost-attribution';
 
 /**
- * Forecast the aggregate LLM cost for an entire Linear project, given per-issue
- * estimates and a calibration dataset.
+ * Forecast an entire project's aggregate cost by Monte Carlo convolution over
+ * its planned issues. Re-exported from `llm-cost-attribution`, which owns the
+ * project forecaster.
  *
- * @param {string}   projectId    Linear project identifier.
- * @param {object[]} issues       Array of `{ identifier, estimate }` objects.
- * @param {object}   [options]
- * @returns {Promise<object>}
+ * Estimation-friendly signature:
+ * `forecastProjectCost(issues, usageSource?, options?)` where `issues` is an
+ * array of `{ size, model }` IssuePlans (the same cell model
+ * `forecastIssueCost` reads) and `usageSource` is estimate-tagged usage
+ * records. Forecasts tokens / turns / dollars only — project-level quota is a
+ * per-issue windowed quantity that does not sum, and is not forecast here.
  */
-export async function forecastProjectCost(projectId, issues, options = {}) {
-  throw new Error('not implemented');
-}
+export { forecastProjectCost } from 'llm-cost-attribution';
 
 /**
- * Build or update a calibration dataset from a set of completed issues whose
- * actual cost is known. Returns calibration parameters used by the forecast
- * functions.
+ * Backtest the empirical forecaster: on held-out estimate-tagged usage records,
+ * does the actual cost land at or below the predicted P80 about 80% of the
+ * time? Re-exported from `llm-cost-attribution`, which owns the coverage
+ * backtester. This is the supported calibration API and the replacement for the
+ * never-shipped `calibrate` placeholder below.
  *
- * @param {object[]} completedIssues  Array of `{ identifier, estimate, actualCostUsd }`.
- * @param {object}   [options]
- * @returns {object}
+ * Signature: `calibrateCoverage(records, options?)`.
  */
-export function calibrate(completedIssues, options = {}) {
-  throw new Error('not implemented');
+export { calibrateCoverage } from 'llm-cost-attribution';
+
+/**
+ * @deprecated Never implemented. The shipped calibration API is
+ * `calibrateCoverage` (re-exported above) — a held-out P80 coverage backtest
+ * over estimate-tagged usage records. This shim is retained only so old imports
+ * fail loudly with a pointer to the replacement instead of silently resolving
+ * to `undefined`.
+ *
+ * @returns {never}
+ */
+export function calibrate() {
+  throw new Error(
+    'calibrate() was never implemented and is not part of the public API; ' +
+      'use calibrateCoverage() instead.',
+  );
 }
