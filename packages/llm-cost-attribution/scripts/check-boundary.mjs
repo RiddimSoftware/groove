@@ -11,14 +11,12 @@ export const BOUNDARY_CONFIG = {
     'src/forecast.mjs',
     'src/quantiles.mjs',
     'src/project-forecast.mjs',
-    'src/enrich.mjs',
     'src/correlate.mjs',
     'src/cost-feature-join.mjs',
     'src/attribution-ports.mjs',
     'src/attribution-workflow.mjs',
   ],
   adapterModules: [
-    { path: 'src/linear-estimate-source.mjs', kind: 'Linear adapter' },
     { path: 'src/pricing.mjs', kind: 'pricing adapter/access point' },
     { path: 'src/quota.mjs', kind: 'quota adapter/access point' },
     { path: 'src/transcripts/', kind: 'transcript filesystem adapter' },
@@ -37,12 +35,12 @@ export const BOUNDARY_CONFIG = {
     {
       pattern: /^(?:node:)?https?$/,
       kind: 'HTTP API',
-      remediation: 'HTTP access belongs in LinearEstimateSource or another adapter. Depend on a port instead.',
+      remediation: 'HTTP access belongs in an adapter, not the attribution core. Depend on a port instead.',
     },
     {
       pattern: /^@linear(?:\/|$)/,
       kind: 'Linear SDK',
-      remediation: 'Depend on the EstimateTaggedUsageSource / LinearEstimateSource port instead.',
+      remediation: 'The Linear SDK has no place in the attribution core; the Linear estimate adapter lives in llm-cost-estimation. Depend on an injected port instead.',
     },
     {
       pattern: /^(?:node:)?child_process$/,
@@ -185,7 +183,7 @@ function formatPackageViolation(sourcePath, specifier, violation, docsPath) {
 function formatAdapterViolation(sourcePath, specifier, resolvedPath, kind, docsPath) {
   return (
     `${sourcePath} imports ${specifier} (${kind}; resolves to ${resolvedPath}) - ` +
-    `Depend on the EstimateTaggedUsageSource / LinearEstimateSource port instead. See ${docsPath}.`
+    `Depend on an attribution port (SessionSource / IssueMatcher / UsageRecordSource / UsageRecordSink) instead. See ${docsPath}.`
   );
 }
 

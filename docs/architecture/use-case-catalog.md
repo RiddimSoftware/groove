@@ -1,5 +1,21 @@
 # Use Case Catalog
 
+The canonical catalog of every application-layer use case in `llm-cost-attribution`:
+its actor, goal, entities/values, ports, primary adapters, and the inward boundary
+rule it relies on. Each entry names its `Current implementation` so the catalog and
+the source stay traceable.
+
+**Dependency rule.** Core modules import no filesystem, transcript, usage-JSONL, CLI,
+HTTP/Linear, or `child_process` API — only ports (`SessionSource`, `IssueMatcher`,
+`UsageRecordSource`, `UsageRecordSink`, and the forecaster's `EstimateTaggedUsageSource`
+/ `PricingTable` / `QuotaModel` / `DiffSource`) cross inward. This rule is enforced by
+`packages/llm-cost-attribution/scripts/check-boundary.mjs` (`npm run test:boundary`) and
+the project-acceptance boundary check; the guard's `coreModules` / `adapterModules` lists
+must stay aligned with the modules cataloged here.
+
+**Convention:** every PR that adds or changes a use case updates this catalog in the
+same PR.
+
 ### ForecastIssueCost
 Actor: Operator
 Goal: Forecast token, turn, $ API-equivalent, and Codex quota cost for one issue from historical issues with the same size and model.
@@ -53,6 +69,17 @@ Ports: none — pure function over in-memory pairs.
 Primary adapters: none. Joining (DiffSource → FeatureCostPair) lives in JoinCostWithFeature.
 Current implementation: `packages/llm-cost-attribution/src/correlate.mjs`
 
+### CreateAttributionWorkflow
+Actor: Operator (library integrator)
+Goal: Bind the four attribution ports into one workflow object so callers can compute issue/worktree cost and backfill usage from their own sources and sinks, with no filesystem assumptions baked into the core.
+Inputs: `{ sessionSource, issueMatcher, usageRecordSource, usageRecordSink, recordedAt? }` — caller-supplied port implementations.
+Outputs: a workflow object exposing `computeIssueCost`, `computeWorktreeCost`, `computeIssueCostFromUsage`, `iterateUsageFromSessions`, and `backfillUsage`.
+Entities / values: ParsedSession, UsageRecord, IssueRollup, UsageBackfillSummary.
+Ports: SessionSource, IssueMatcher, UsageRecordSource, UsageRecordSink.
+Primary adapters: none in the core — each convenience wrapper (`computeIssueCost`, etc.) wires the real transcript/usage adapters (`transcriptSessionSource`, `cwdIssueMatcher`, `usageJsonlRecordSource`, `appendingUsageRecordSink`) at the edge, while tests supply in-memory ports.
+Notes: pure composition entry point for the port-based core — imports no filesystem/transcript/usage-JSONL/CLI/HTTP/Linear/child_process (enforced by `npm run test:boundary` and the project-acceptance boundary check).
+Current implementation: `packages/llm-cost-attribution/src/attribution-workflow.mjs` (`createAttributionWorkflow`)
+
 ### ComputeIssueCost
 Actor: Operator
 Goal: Roll up token/turn/quota cost for one issue from caller-supplied sessions, without assuming the data came from local Claude/Codex transcript directories.
@@ -103,3 +130,14 @@ Entities / values: UsageRecord, IssueRollup.
 Ports: UsageRecordSource.
 Primary adapters: `usageJsonlRecordSource` over the usage-JSONL reader (drops malformed lines); in-memory sources in tests. The `computeIssueCostFromUsage` convenience wrapper wires the reader at the edge.
 Current implementation: `packages/llm-cost-attribution/src/attribution-workflow.mjs` (`computeIssueCostFromUsageRecords`)
+
+### ListKnownIssues
+Actor: Operator
+Goal: Enumerate every issue identifier that has at least one local Claude or Codex session, for pickers and dashboards, without computing any rollup.
+Inputs: options selecting the local transcript roots (defaults to the standard Claude/Codex session directories).
+Outputs: a sorted list of issue identifiers discovered across local transcripts.
+Entities / values: ParsedSession (read for its identifier only).
+Ports: none — adapter-only enumeration over the transcript readers.
+Primary adapters: Claude/Codex transcript readers.
+Notes: adapter-only; it lives at the edge rather than the core because it reads the local transcript filesystem directly, so it is not subject to the core dependency rule.
+Current implementation: `packages/llm-cost-attribution/src/index.mjs` (`listKnownIssues`)
