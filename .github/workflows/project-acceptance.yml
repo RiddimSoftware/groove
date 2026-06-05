@@ -1,0 +1,27 @@
+name: project-acceptance
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  project-acceptance:
+    name: project-acceptance
+    runs-on: ubuntu-latest
+    # Temporary ATDD completeness gate for the llm-cost architecture contracts.
+    # Do not add this job to branch protection; pr-build remains the required gate.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install workspace deps
+        run: npm install --no-audit --no-fund
+
+      - name: Run llm-cost architecture contract acceptance checks
+        run: npm run project-acceptance
