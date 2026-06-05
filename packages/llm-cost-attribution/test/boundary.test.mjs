@@ -1,10 +1,13 @@
 import { strict as assert } from 'node:assert';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { spawnSync } from 'node:child_process';
+
+import { BOUNDARY_CONFIG } from '../scripts/check-boundary.mjs';
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CHECK_BOUNDARY = join(PACKAGE_ROOT, 'scripts/check-boundary.mjs');
@@ -41,15 +44,15 @@ describe('boundary checker', () => {
     });
   });
 
-  it('fails when a core module imports the Linear adapter', async () => {
+  it('fails when a core module imports the attribution transcript/usage adapter', async () => {
     await withFixture({
-      'src/forecast.mjs': "import { LinearEstimateSource } from './linear-estimate-source.mjs';\nvoid LinearEstimateSource;\n",
+      'src/forecast.mjs': "import { transcriptSessionSource } from './attribution-adapters.mjs';\nvoid transcriptSessionSource;\n",
     }, async (root) => {
       const result = runBoundary(root);
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /src\/forecast\.mjs imports \.\/linear-estimate-source\.mjs/);
-      assert.match(result.stderr, /Linear adapter/);
-      assert.match(result.stderr, /EstimateTaggedUsageSource \/ LinearEstimateSource port/);
+      assert.match(result.stderr, /src\/forecast\.mjs imports \.\/attribution-adapters\.mjs/);
+      assert.match(result.stderr, /attribution transcript\/usage adapter/);
+      assert.match(result.stderr, /SessionSource \/ IssueMatcher \/ UsageRecordSource \/ UsageRecordSink/);
       assert.match(result.stderr, /docs\/architecture\/use-case-catalog\.md/);
     });
   });
@@ -121,5 +124,29 @@ describe('boundary checker', () => {
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /Boundary check passed/);
     });
+  });
+});
+
+describe('boundary config integrity', () => {
+  it('every configured core module exists in the package', () => {
+    for (const modulePath of BOUNDARY_CONFIG.coreModules) {
+      assert.ok(
+        existsSync(join(PACKAGE_ROOT, modulePath)),
+        `coreModules references a path that no longer exists: ${modulePath}. ` +
+          'A core module that has moved or been deleted is silently skipped by the guard - ' +
+          'remove or correct the entry so the boundary config reflects the real package.',
+      );
+    }
+  });
+
+  it('every configured adapter module exists in the package', () => {
+    for (const entry of BOUNDARY_CONFIG.adapterModules) {
+      assert.ok(
+        existsSync(join(PACKAGE_ROOT, entry.path)),
+        `adapterModules references a path that no longer exists: ${entry.path} (${entry.kind}). ` +
+          'A phantom adapter entry classifies nothing - ' +
+          'remove or correct the entry so the boundary config reflects the real package.',
+      );
+    }
   });
 });
