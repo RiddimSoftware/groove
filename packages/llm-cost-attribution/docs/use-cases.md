@@ -12,7 +12,7 @@ port-based workflows live in `src/attribution-workflow.mjs` (core, I/O-free); th
 real Claude/Codex transcript and usage-JSONL adapters live in
 `src/attribution-adapters.mjs`. Boundary rule: core modules import no filesystem,
 transcript, usage-JSONL, CLI, HTTP/Linear, or child_process APIs — enforced by
-`npm run test:boundary` and the project-acceptance boundary check.
+`npm run test:boundary`.
 
 ## CreateAttributionWorkflow
 `createAttributionWorkflow({ sessionSource, issueMatcher, usageRecordSource, usageRecordSink, recordedAt })`

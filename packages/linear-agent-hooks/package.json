@@ -6,6 +6,9 @@
   "bin": {
     "linear-agent-hooks": "./bin/setup.mjs"
   },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
   "files": [
     "bin/",
     "hooks/",
