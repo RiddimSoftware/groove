@@ -1,6 +1,9 @@
 {
   "name": "groove",
   "private": true,
+  "scripts": {
+    "project-acceptance": "node scripts/project-acceptance.mjs"
+  },
   "workspaces": [
     "packages/*"
   ]

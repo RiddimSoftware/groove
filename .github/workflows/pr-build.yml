@@ -46,6 +46,8 @@ jobs:
 
       - name: Run tests
         run: |
+          # Project ATDD checks live under test/project-acceptance/ and run only
+          # in project-acceptance.yml while that temporary gate is active.
           node --test \
             packages/linear-agent-hooks/tests/post-tool-use.test.mjs \
             packages/linear-agent-hooks/tests/stop.test.mjs \
