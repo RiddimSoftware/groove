@@ -15,6 +15,12 @@ The stats and forecaster core depends only on the `EstimateTaggedUsageSource` an
 `LinearEstimateSource` ports. No Linear SDK, HTTP client, or filesystem import may
 cross inward into the domain/application layer.
 
+The forecast and calibration use cases below are re-exported from
+`llm-cost-attribution`, which owns the empirical-quantile forecaster, the project
+forecaster, and the coverage backtester. The estimation package surfaces them
+through its public barrel so callers import one package; it does not re-implement
+the math.
+
 ---
 
 ## EnrichUsageWithEstimate
@@ -43,17 +49,17 @@ absent.
 
 | Field | Value |
 |---|---|
-| **Goal** | Forecast the expected LLM cost for a single issue before work begins, given its story-point estimate and a calibration dataset built from completed issues with known actual cost. |
-| **Inputs** | `estimate: number` (story-point estimate); `calibration: CalibrationDataset` (from `calibrate()`). |
-| **Outputs** | `IssueCostForecast` — empirical quantile distribution of expected cost (p50, p80, p95) and dollar API-equivalent. |
-| **Entities / values** | `CalibrationDataset` — cost samples grouped by story-point estimate; `IssueCostForecast` — quantile estimates. |
-| **Ports** | `EstimateTaggedUsageSource` — supplies completed-issue records with `estimate` already stamped, used at calibration time (see `calibrate()`). The `forecastIssueCost` call itself takes no port — it runs over an already-built `CalibrationDataset` value. |
-| **Primary adapters** | `UsageJsonlEstimateTaggedSource` (planned) — reads enriched `usage.jsonl` files produced by `EnrichUsageWithEstimate`. |
+| **Goal** | Forecast the expected LLM cost for a single issue before work begins, from the historical cost of completed issues that share its `{ size, model }` cell. |
+| **Inputs** | `cell: { size, model }`; `records` — estimate-tagged usage records (the cell's history), the same source shape the attribution forecaster accepts. |
+| **Outputs** | `IssueCostForecast` — `tokens`, `turns`, and `dollars` channels each with P50/P80 and `n`; an optional Codex `quota`-fraction P50/P80 (single-issue only, never aggregated to a project) with `quotaReason`; plus `lowConfidence` and `empty` markers. |
+| **Entities / values** | `Cell` / `FeatureRecord` (`{ size, model }`); `IssueCostForecast`. |
+| **Ports** | `EstimateTaggedUsageSource` supplies the records; `PricingTable` (`priceFor(model, buckets)`) prices the dollars channel; `QuotaModel` (`quotaFractionFor(record)`) reads the Codex quota fraction. All three are injected — the forecaster imports none of their implementations. |
+| **Primary adapters** | `usage.jsonl` reader (`EstimateTaggedUsageSource`), synthetic record source in tests, `pricing.mjs` (`PricingTable`), `quota.mjs` (`QuotaModel`) — all in `llm-cost-attribution`. |
 | **Linear issues** | GRV-3, GRV-5 |
-| **Status** | Planned — stub throws `Error('not implemented')`. |
+| **Current implementation** | Re-exported from `llm-cost-attribution` (`packages/llm-cost-attribution/src/forecast.mjs`). |
 
 **Boundary rule:** The empirical quantile forecaster is a pure function over the
-calibration dataset. No Linear SDK, HTTP, or filesystem call occurs during
+records and its injected ports. No Linear SDK, HTTP, or filesystem call occurs during
 `forecastIssueCost`.
 
 ---
@@ -62,28 +68,45 @@ calibration dataset. No Linear SDK, HTTP, or filesystem call occurs during
 
 | Field | Value |
 |---|---|
-| **Goal** | Forecast the aggregate LLM cost for an entire project by Monte Carlo convolution over the per-issue cost distributions for each issue's estimate. |
-| **Inputs** | `issues: { identifier: string, estimate: number }[]` (project issues with story-point estimates); `calibration: CalibrationDataset`. |
-| **Outputs** | `ProjectCostForecast` — aggregate quantile distribution (p50, p80, p95) and dollar API-equivalent for the project total. |
-| **Entities / values** | `CalibrationDataset`; `ProjectCostForecast` — aggregate quantile estimates. |
-| **Ports** | `EstimateTaggedUsageSource` — used at calibration time only (see `calibrate()`). The `forecastProjectCost` call itself takes no port. |
-| **Primary adapters** | `UsageJsonlEstimateTaggedSource` (planned) — same adapter as `ForecastIssueCost`. |
+| **Goal** | Forecast an entire project's aggregate cost by Monte Carlo convolution over its planned issues, so summed quantiles don't over-estimate the total (per-issue tail risks partly diversify). |
+| **Inputs** | `issues: { size, model }[]` (one IssuePlan per planned issue); `usageSource` — estimate-tagged usage records; `options: { iterations, seed, minSampleSize, pricingTable }`. |
+| **Outputs** | `ProjectCostForecast` — `tokens`, `turns`, and (when priced) `dollars` channels, each with P50/P80, `mean`, and `variance`; plus `iterations`, `seed`, `issues`, `lowConfidence`, and `empty`. |
+| **Entities / values** | `IssuePlan` (`{ size, model }`); `ProjectCostForecast`; `ProjectChannelForecast`. |
+| **Ports** | The per-issue forecaster's empirical cell sampler (`collectCellSamples`); the shared `PricingTable` (`priceFor(model, buckets)`); a seeded RNG. The call reads records through the sampler, not directly. |
+| **Primary adapters** | Seeded RNG (mulberry32, in-module); `pricing.mjs` (`PricingTable`) — both in `llm-cost-attribution`. |
 | **Linear issue** | GRV-6 |
-| **Status** | Planned — stub throws `Error('not implemented')`. |
+| **Current implementation** | Re-exported from `llm-cost-attribution` (`packages/llm-cost-attribution/src/project-forecast.mjs`). |
+
+**Scope:** tokens, turns, and dollars only. Project-level quota and wall-clock are
+excluded by construction — they are windowed / scheduling quantities that do not sum
+across issues.
 
 **Boundary rule:** The Monte Carlo convolution is pure. No Linear SDK, HTTP, or
 filesystem call occurs during `forecastProjectCost`.
 
 ---
 
-## calibrate (support function, not a use case)
+## CalibrateCoverage
 
-Builds a `CalibrationDataset` from completed issues whose actual cost is known.
-Used as a preparation step before calling the forecast functions.
+| Field | Value |
+|---|---|
+| **Goal** | Backtest the forecaster: hold out a deterministic fraction of each cell's issues, fit on the rest, and measure how often held-out actuals land at or below the predicted P80 — so a "P80" only keeps the name if it covers ~80% of held-out cost. |
+| **Inputs** | `records` — estimate-tagged usage records; `options: { seed, holdoutFraction, quantile, deviationThreshold, minHoldout, minTrain }`. |
+| **Outputs** | `CalibrationReport` — per-cell and overall coverage, with cells whose coverage drifts from the target band beyond `deviationThreshold` flagged. |
+| **Entities / values** | `CalibrationReport`; `CalibrationCellReport`. |
+| **Ports** | None beyond the per-issue forecaster it fits with (`forecastIssueCost`). Pure and I/O-free; callers stream records in. |
+| **Primary adapters** | Seeded held-out split (mulberry32, in-module) — in `llm-cost-attribution`. |
+| **Linear issue** | GRV-3 |
+| **Current implementation** | Re-exported as `calibrateCoverage` from `llm-cost-attribution` (`packages/llm-cost-attribution/src/calibrate.mjs`). |
 
-**Input:** `completedIssues: { identifier: string, estimate: number, actualCostUsd: number }[]`
-**Output:** `CalibrationDataset` — cost samples grouped by story-point estimate.
-**Ports used:** None (pure transform over caller-supplied data; I/O for fetching the
-source records is the caller's responsibility, typically via `EstimateTaggedUsageSource`).
-**Linear issue:** GRV-3
-**Status:** Planned — stub throws `Error('not implemented')`.
+**Boundary rule:** The backtest is a pure function over the supplied records. No Linear
+SDK, HTTP, or filesystem call occurs during `calibrateCoverage`.
+
+---
+
+## calibrate (deprecated)
+
+The barrel exports a bare `calibrate` name only as a deprecated compatibility shim.
+It was never implemented; calling it throws an error naming its replacement,
+`calibrateCoverage` (above). It is omitted from the README's ready-to-use import
+example and carries no supported behavior.
