@@ -32,6 +32,9 @@ jobs:
           node --check packages/linear-agent-hooks/lib/transcript.mjs
           node --check packages/linear-agent-hooks/bin/setup.mjs
           node --check packages/issue-standards/bin/setup.mjs
+          node --check scripts/project-acceptance.mjs
+          node --check scripts/check-llm-cost-catalog-api-alignment.mjs
+          node --check test/project-acceptance/llm-cost-architecture-contracts/catalog-api-alignment.check.mjs
           node --check packages/llm-cost-attribution/bin/llm-cost.mjs
           for f in packages/llm-cost-attribution/src/*.mjs packages/llm-cost-attribution/src/transcripts/*.mjs; do
             node --check "$f"
@@ -53,6 +56,7 @@ jobs:
             packages/linear-agent-hooks/tests/stop.test.mjs \
             packages/linear-agent-hooks/tests/comment.test.mjs \
             packages/linear-agent-hooks/tests/transcript.test.mjs \
+            scripts/check-llm-cost-catalog-api-alignment.test.mjs \
             packages/llm-cost-attribution/test/issue-pattern.test.mjs \
             packages/llm-cost-attribution/test/aggregator.test.mjs \
             packages/llm-cost-attribution/test/usage-jsonl.test.mjs \
