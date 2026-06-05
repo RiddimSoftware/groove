@@ -2,7 +2,7 @@
   "name": "groove",
   "private": true,
   "scripts": {
-    "project-acceptance": "node scripts/project-acceptance.mjs"
+    "test": "node --test test/*.test.mjs && npm test --workspaces --if-present"
   },
   "workspaces": [
     "packages/*"
