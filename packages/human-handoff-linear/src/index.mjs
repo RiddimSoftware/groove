@@ -8,3 +8,20 @@ export { createSetupUseCase } from './use-cases/setup.mjs';
 export { createSyncTemplateUseCase } from './use-cases/sync-template.mjs';
 export { createDoctorUseCase } from './use-cases/doctor.mjs';
 export { createBootstrapProjectUseCase } from './use-cases/bootstrap-project.mjs';
+
+export { createEnvironmentSecretReader } from './adapters/environment-secret-reader.mjs';
+export { createInteractiveSecretReader } from './adapters/interactive-secret-reader.mjs';
+export { createNoopLinearWorkspace } from './adapters/noop-linear-workspace.mjs';
+export { createLinearGraphqlWorkspace, LINEAR_GRAPHQL_ENDPOINT } from './adapters/linear-graphql-workspace.mjs';
+export { createStreamConsoleReporter } from './adapters/stream-console-reporter.mjs';
+
+export {
+  LinearError,
+  LinearAuthError,
+  LinearPermissionError,
+  LinearRateLimitError,
+  LinearNetworkError,
+  LinearApiError,
+  MissingTokenError,
+  exitCodeFor,
+} from './errors.mjs';

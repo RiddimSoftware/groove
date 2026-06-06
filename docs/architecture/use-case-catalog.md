@@ -149,6 +149,17 @@ Inputs: setup command selection, optional Linear team selector, Human Handoff te
 Outputs: command contract metadata, no-op setup/sync/doctor/bootstrap results, mutation count, token-readiness signal, validated template body.
 Entities / values: SetupCommand, LinearTeamSelector, HumanHandoffTemplateBody.
 Ports: LinearWorkspace, ConsoleReporter, SecretReader.
-Primary adapters: CLI command parser, environment-backed SecretReader, stream ConsoleReporter, no-op LinearWorkspace adapter.
-Notes: foundation scaffold only. Core use-case modules import no process environment, child_process, direct fetch, or Linear API details; real GraphQL mutations belong in a future LinearWorkspace adapter.
+Primary adapters: CLI command parser, environment-backed SecretReader, stream ConsoleReporter, no-op LinearWorkspace adapter, real GraphQL LinearWorkspace adapter (`createLinearGraphqlWorkspace`).
+Notes: foundation scaffold for setup/sync-template/bootstrap-project; `doctor` is no longer no-op (see ValidateLinearSetupAuth). Core use-case modules import no process environment, child_process, direct fetch, or Linear API details — enforced by `tests/boundary.test.mjs`.
 Current implementation: `packages/human-handoff-linear/src/use-cases/define-human-handoff-linear-package-contract.mjs`, `packages/human-handoff-linear/src/use-cases/*.mjs`
+
+### ValidateLinearSetupAuth
+Actor: Workflow operator
+Goal: Validate the Linear API token by fetching the current viewer and workspace through the LinearWorkspace port, so `doctor` can confirm the token works before any mutating command attempts to use it. Read-only: never creates or updates templates, labels, issues, or relations.
+Inputs: SecretReader (resolves `LINEAR_API_KEY`), LinearWorkspace (`getViewer`), `tokenRequired` flag (default true).
+Outputs: DoctorResult `{ command, tokenPresent, ok, viewer, checks }` where each check carries `{ name, ok, required, error?, details? }`. The CLI maps a failing check's `error.kind` to a stable exit code (missing_token=2, auth=3, permission=4, rate_limit=5, network=6, api=7).
+Entities / values: LinearViewer, LinearOrganization, DoctorCheck.
+Ports: SecretReader, LinearWorkspace (only `getViewer` is called).
+Primary adapters: `createInteractiveSecretReader` (env + hidden TTY prompt), `createLinearGraphqlWorkspace` (HTTPS GraphQL with injected `fetch` for tests), `createStreamConsoleReporter`.
+Notes: core use case imports no fetch/env/child_process (enforced by `tests/boundary.test.mjs`). Tests cover GraphQL HTTP errors (401/403/429), GraphQL `errors[]` shapes, network failure, and the missing-token path through injected fetch and stub workspaces — no real Linear API token is required.
+Current implementation: `packages/human-handoff-linear/src/use-cases/doctor.mjs`
