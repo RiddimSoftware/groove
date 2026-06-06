@@ -56,6 +56,19 @@ export async function runCli({ argv, env, stdout, stderr, stdin = null, fetch: f
     });
   }
 
+  if (command === 'sync-template') {
+    return runSyncTemplateCommand({
+      options: parsed.options,
+      env,
+      stdin,
+      stdout,
+      stderr,
+      reporter,
+      fetchImpl,
+      workspaceFactory,
+    });
+  }
+
   const secretReader = createEnvironmentSecretReader(env);
   const workspace = createNoopLinearWorkspace();
 
@@ -67,6 +80,39 @@ export async function runCli({ argv, env, stdout, stderr, stdin = null, fetch: f
     reporter.error(`human-handoff-linear ${command} failed - ${err.message}`);
     reporter.error('human-handoff-linear failed - no mutations performed');
     return 1;
+  }
+}
+
+async function runSyncTemplateCommand({ options, env, stdin, stdout, stderr, reporter, fetchImpl, workspaceFactory }) {
+  const secretReader = createInteractiveSecretReader({ env, stdin, stdout });
+
+  let apiKey = null;
+  try {
+    apiKey = await secretReader.readLinearApiKey({ interactive: !options.noPrompt });
+  } catch (err) {
+    reporter.error(`human-handoff-linear sync-template failed - ${err.message}`);
+    return 1;
+  }
+  if (!apiKey) {
+    reporter.error('human-handoff-linear sync-template failed - LINEAR_API_KEY is not set.');
+    reporter.error('Export LINEAR_API_KEY or rerun without --no-prompt to be prompted.');
+    return exitCodeFor('missing_token');
+  }
+
+  const factory = workspaceFactory ?? (({ apiKey: key }) => createLinearGraphqlWorkspace({ apiKey: key, fetch: fetchImpl }));
+  const workspace = factory({ apiKey });
+
+  const templateBody = await readFile(TEMPLATE_PATH, 'utf8');
+  try {
+    const result = await createSyncTemplateUseCase({ reporter, templateBody, workspace })(options);
+    const suffix = result.mutationsPerformed === 1
+      ? `${result.action} performed (id: ${result.templateId})`
+      : (result.action === 'no-change' ? `no change (id: ${result.templateId})` : `${result.action} planned`);
+    stdout.write(`human-handoff-linear sync-template complete - ${suffix}\n`);
+    return 0;
+  } catch (err) {
+    reporter.error(`human-handoff-linear sync-template failed - ${err.message}`);
+    return exitCodeFor(err);
   }
 }
 
@@ -129,7 +175,7 @@ async function dispatchCommand({ command, options, reporter, secretReader, works
 
 function parseArgs(argv) {
   const args = [...argv];
-  const options = { dryRun: true, quiet: false, verbose: false, team: null, noPrompt: false };
+  const options = { dryRun: false, quiet: false, verbose: false, team: null, noPrompt: false };
   let help = false;
   let command = null;
 
@@ -139,6 +185,7 @@ function parseArgs(argv) {
     if (arg === '--quiet' || arg === '-q') { options.quiet = true; continue; }
     if (arg === '--verbose' || arg === '-v') { options.verbose = true; continue; }
     if (arg === '--no-prompt') { options.noPrompt = true; continue; }
+    if (arg === '--dry-run') { options.dryRun = true; continue; }
     if (arg === '--team') {
       if (args[i + 1] === undefined) return { options, error: '--team requires a value' };
       options.team = args[i + 1];
@@ -149,6 +196,13 @@ function parseArgs(argv) {
     if (arg.startsWith('-')) return { options, error: `Unknown option: ${arg}` };
     if (command === null) { command = arg; continue; }
     return { options, error: `Unexpected argument: ${arg}` };
+  }
+
+  // Scaffold commands (setup, bootstrap-project) default to dry-run / no-op
+  // because their use cases have not yet been implemented. sync-template
+  // performs real Linear writes by default unless the caller passes --dry-run.
+  if (command === 'setup' || command === 'bootstrap-project') {
+    options.dryRun = true;
   }
 
   return { command, help, options };
@@ -169,6 +223,8 @@ Commands:
 ${rows}
 
 Options:
+  --dry-run          Plan only — print the action sync-template would take
+                     without calling any Linear write mutation.
   --team <key>       Linear team key for future setup/bootstrap operations
   --no-prompt        Disable interactive prompts (for CI / non-TTY environments)
   -q, --quiet        Print only final outcome and errors
@@ -176,14 +232,19 @@ Options:
   -h, --help         Show this help
 
 Auth:
-  doctor reads the Linear API key from LINEAR_API_KEY. When unset and stdin is
-  a TTY, it prompts for the key without echoing. Pass --no-prompt to skip the
-  prompt and exit with a missing-token error instead.
+  doctor and sync-template read the Linear API key from LINEAR_API_KEY. When
+  unset and stdin is a TTY, the CLI prompts for the key without echoing. Pass
+  --no-prompt to skip the prompt and exit with a missing-token error instead.
 
   Create a personal API key at https://linear.app/settings/api.
 
-Current scaffold behavior:
-  setup, sync-template, and bootstrap-project validate routing and contracts
-  only. No Linear mutations are performed by those commands.
+Mutations:
+  sync-template performs real Linear writes — it creates the "Human Handoff"
+  workspace issue template if missing, updates it if the body drifted, and
+  reports no change when already in sync. Pass --dry-run to plan without
+  writing.
+
+  No Linear mutations are performed by the setup or bootstrap-project scaffold
+  commands; they remain dry-run placeholders awaiting later issues.
 `;
 }

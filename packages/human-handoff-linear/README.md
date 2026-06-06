@@ -3,11 +3,15 @@
 Linear workflow primitives for installing and maintaining the Human Handoff
 issue template used by autonomous project workflows.
 
-This package is still a contract shell — most commands (`setup`,
-`sync-template`, `bootstrap-project`) are dry-run/no-op scaffolds awaiting
-later issues. The `doctor` command, however, performs a real Linear auth check
-through the GraphQL adapter, and the underlying `LinearWorkspace` adapter
-implements the full surface those later commands will use.
+Today the package ships two real Linear commands:
+
+- `doctor` — read-only auth and viewer/organization check.
+- `sync-template` — provision the workspace-level `Human Handoff` issue
+  template idempotently: create it if missing, update its body when the
+  bundled markdown drifts, report no-change when already in sync.
+
+`setup` and `bootstrap-project` remain scaffold-only and perform no Linear
+mutations; later issues will wire them to the same `LinearWorkspace` adapter.
 
 ## Requirements
 
@@ -39,8 +43,35 @@ Subcommands:
 - `doctor` — validate the Linear API token by fetching the current viewer and
   workspace. Read-only: never creates or updates templates, labels, issues, or
   relations.
-- `setup`, `sync-template`, `bootstrap-project` — scaffold-only today; reserved
-  command surfaces that later issues will wire to real Linear mutations.
+- `sync-template` — create or update the workspace-level `Human Handoff` issue
+  template idempotently. Pass `--dry-run` to plan without writing.
+- `setup`, `bootstrap-project` — scaffold-only today; reserved command surfaces
+  that later issues will wire to real Linear mutations.
+
+### `sync-template`
+
+```text
+$ human-handoff-linear sync-template
+human-handoff-linear sync-template - syncing "Human Handoff" workspace template
+Created workspace template "Human Handoff" (id: tpl_…)
+human-handoff-linear sync-template complete - create performed (id: tpl_…)
+```
+
+Run it once to install the template; run it again after editing
+`templates/human-handoff-issue-body.md` to push the new body. When the body
+already matches what is in Linear, `sync-template` reports `no change` and
+performs no write. It is safe to run from CI on every push.
+
+```text
+$ human-handoff-linear sync-template --dry-run   # plan-only, no writes
+human-handoff-linear sync-template - syncing "Human Handoff" workspace template
+[dry-run] Would update workspace template "Human Handoff" (id: tpl_…)
+human-handoff-linear sync-template complete - update planned
+```
+
+The same Linear error codes that `doctor` returns also apply to
+`sync-template` (auth → 3, permission → 4, rate-limit → 5, network → 6, other
+API errors → 7).
 
 ### `doctor`
 
@@ -70,22 +101,30 @@ The CLI adapter is deliberately thin. Core behavior is available as use-case
 modules with injected ports:
 
 ```js
+import { readFile } from 'node:fs/promises';
 import {
-  createBootstrapProjectUseCase,
   createDoctorUseCase,
   createLinearGraphqlWorkspace,
-  createSetupUseCase,
   createSyncTemplateUseCase,
 } from 'human-handoff-linear';
 
 const workspace = createLinearGraphqlWorkspace({ apiKey: process.env.LINEAR_API_KEY });
+const reporter = { info: console.log, error: console.error };
+
+// Read-only auth check
 const doctor = createDoctorUseCase({
-  reporter: { info: console.log, error: console.error },
+  reporter,
   secretReader: { read: (name) => process.env[name] },
   workspace,
 });
-const result = await doctor();
-if (!result.ok) process.exit(1);
+const auth = await doctor();
+if (!auth.ok) process.exit(1);
+
+// Idempotent template sync
+const templateBody = await readFile('./templates/human-handoff-issue-body.md', 'utf8');
+const sync = createSyncTemplateUseCase({ reporter, templateBody, workspace });
+const result = await sync({ dryRun: false });
+// → { action: 'create' | 'update' | 'no-change', templateId, mutationsPerformed, ... }
 ```
 
 Ports are plain objects:
