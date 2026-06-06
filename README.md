@@ -22,6 +22,16 @@ Claude Code and Codex hooks that automatically post a provenance comment back to
 npx linear-agent-hooks setup
 ```
 
+### [`human-handoff-linear`](packages/human-handoff-linear)
+
+Linear-backed workflow primitives for the human-handoff pattern — one project-level Human Handoff issue that aggregates every step a human still has to do in an otherwise autonomous flow.
+
+Validate your Linear API key without touching any of your data:
+
+```bash
+LINEAR_API_KEY=lin_api_… npx human-handoff-linear doctor
+```
+
 ### [`llm-cost-attribution`](packages/llm-cost-attribution)
 
 Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no custom telemetry pipeline required.

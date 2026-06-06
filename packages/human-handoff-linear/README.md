@@ -1,17 +1,32 @@
 # human-handoff-linear
 
-Linear workflow primitives for installing and maintaining the Human Handoff issue
-template used by autonomous project workflows.
+Linear workflow primitives for installing and maintaining the Human Handoff
+issue template used by autonomous project workflows.
 
-This package is intentionally a contract shell. It exposes the CLI and importable
-use-case boundaries that future work will wire to real Linear GraphQL mutations.
-Current commands are dry-run/no-op unless stated otherwise.
+This package is still a contract shell — most commands (`setup`,
+`sync-template`, `bootstrap-project`) are dry-run/no-op scaffolds awaiting
+later issues. The `doctor` command, however, performs a real Linear auth check
+through the GraphQL adapter, and the underlying `LinearWorkspace` adapter
+implements the full surface those later commands will use.
 
 ## Requirements
 
 - Node.js 20+
-- A Linear API token for future mutation-backed commands. The current scaffold
-  does not require a token for help, routing, or no-op checks.
+- A Linear personal API key. Create one at
+  <https://linear.app/settings/api>.
+
+## Auth
+
+The CLI reads the API key from the `LINEAR_API_KEY` environment variable.
+
+```bash
+export LINEAR_API_KEY=lin_api_…
+```
+
+If the variable is unset and you run from an interactive terminal, the CLI
+prompts for the key without echoing it. Pass `--no-prompt` to disable that
+fallback (use in CI, where there is no TTY anyway). The key is never logged,
+written to disk, or echoed back.
 
 ## CLI
 
@@ -21,16 +36,33 @@ npx human-handoff-linear --help
 
 Subcommands:
 
-- `setup` - validate the package contract and report the future Linear template
-  setup plan. No Linear mutations are performed in this scaffold.
-- `sync-template` - report the checked-in Human Handoff issue body template that
-  future work will sync into Linear.
-- `doctor` - check local CLI readiness without contacting Linear.
-- `bootstrap-project` - reserve the project bootstrap command surface for later
-  implementation.
+- `doctor` — validate the Linear API token by fetching the current viewer and
+  workspace. Read-only: never creates or updates templates, labels, issues, or
+  relations.
+- `setup`, `sync-template`, `bootstrap-project` — scaffold-only today; reserved
+  command surfaces that later issues will wire to real Linear mutations.
 
-All commands are safe for non-interactive use. Unknown commands fail with a
-terse message and do not require a Linear token.
+### `doctor`
+
+```text
+$ human-handoff-linear doctor
+human-handoff-linear doctor - validating Linear auth (read-only).
+Linear token: present.
+Authenticated as Ada Lovelace in workspace Riddim (riddim).
+human-handoff-linear doctor complete - no mutations performed
+```
+
+Failure cases map to stable exit codes for scripting:
+
+| Condition | Stderr prefix | Exit |
+|---|---|---|
+| `LINEAR_API_KEY` unset and `--no-prompt` (or non-TTY) | `LINEAR_API_KEY is not set` | 2 |
+| HTTP 401 / GraphQL `AUTHENTICATION_ERROR` | `[auth]` | 3 |
+| HTTP 403 / GraphQL `FORBIDDEN` | `[permission]` | 4 |
+| HTTP 429 / GraphQL `RATELIMITED` | `[rate_limit]` | 5 |
+| Network/transport failure | `[network]` | 6 |
+| Other GraphQL or HTTP error | `[api]` | 7 |
+| Other / unknown | (no prefix) | 1 |
 
 ## Application API
 
@@ -41,20 +73,36 @@ modules with injected ports:
 import {
   createBootstrapProjectUseCase,
   createDoctorUseCase,
+  createLinearGraphqlWorkspace,
   createSetupUseCase,
   createSyncTemplateUseCase,
 } from 'human-handoff-linear';
+
+const workspace = createLinearGraphqlWorkspace({ apiKey: process.env.LINEAR_API_KEY });
+const doctor = createDoctorUseCase({
+  reporter: { info: console.log, error: console.error },
+  secretReader: { read: (name) => process.env[name] },
+  workspace,
+});
+const result = await doctor();
+if (!result.ok) process.exit(1);
 ```
 
 Ports are plain objects:
 
-- `ConsoleReporter` - receives `info`, `error`, and optional `verbose` messages.
-- `SecretReader` - resolves secrets such as `LINEAR_API_KEY`.
-- `LinearWorkspace` - future adapter boundary for Linear workspace/template
-  operations.
+- `ConsoleReporter` — receives `info`, `error`, and optional `verbose` messages.
+- `SecretReader` — resolves secrets such as `LINEAR_API_KEY`.
+- `LinearWorkspace` — adapter boundary for Linear workspace operations.
 
-Core use-case modules do not read environment variables, call `fetch`, or exit
-the process. Those responsibilities stay in CLI/adapter code.
+The full LinearWorkspace surface (`getViewer`, `listTeams`, `listLabels`,
+`createLabel`, `getTemplate`, `createTemplate`, `updateTemplate`,
+`createIssue`, `createRelation`) is implemented by
+`createLinearGraphqlWorkspace`. Later mutating commands build on these
+methods; they do not implement their own GraphQL.
+
+Core use-case modules do not read environment variables, call `fetch`, or
+exit the process. Those responsibilities stay in CLI/adapter code (enforced
+by `tests/boundary.test.mjs`).
 
 ## Template
 

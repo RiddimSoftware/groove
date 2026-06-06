@@ -2,8 +2,11 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEnvironmentSecretReader } from '../adapters/environment-secret-reader.mjs';
+import { createInteractiveSecretReader } from '../adapters/interactive-secret-reader.mjs';
+import { createLinearGraphqlWorkspace } from '../adapters/linear-graphql-workspace.mjs';
 import { createNoopLinearWorkspace } from '../adapters/noop-linear-workspace.mjs';
 import { createStreamConsoleReporter } from '../adapters/stream-console-reporter.mjs';
+import { exitCodeFor } from '../errors.mjs';
 import { defineHumanHandoffLinearPackageContract } from '../use-cases/define-human-handoff-linear-package-contract.mjs';
 import { createBootstrapProjectUseCase } from '../use-cases/bootstrap-project.mjs';
 import { createDoctorUseCase } from '../use-cases/doctor.mjs';
@@ -13,7 +16,7 @@ import { createSyncTemplateUseCase } from '../use-cases/sync-template.mjs';
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TEMPLATE_PATH = join(PACKAGE_ROOT, 'templates', 'human-handoff-issue-body.md');
 
-export async function runCli({ argv, env, stdout, stderr }) {
+export async function runCli({ argv, env, stdout, stderr, stdin = null, fetch: fetchImpl, workspaceFactory } = {}) {
   const parsed = parseArgs(argv);
   const reporter = createStreamConsoleReporter({
     stdout,
@@ -40,6 +43,19 @@ export async function runCli({ argv, env, stdout, stderr }) {
     return 0;
   }
 
+  if (command === 'doctor') {
+    return runDoctorCommand({
+      options: parsed.options,
+      env,
+      stdin,
+      stdout,
+      stderr,
+      reporter,
+      fetchImpl,
+      workspaceFactory,
+    });
+  }
+
   const secretReader = createEnvironmentSecretReader(env);
   const workspace = createNoopLinearWorkspace();
 
@@ -54,6 +70,49 @@ export async function runCli({ argv, env, stdout, stderr }) {
   }
 }
 
+async function runDoctorCommand({ options, env, stdin, stdout, stderr, reporter, fetchImpl, workspaceFactory }) {
+  const secretReader = createInteractiveSecretReader({ env, stdin, stdout });
+
+  let apiKey = null;
+  try {
+    apiKey = await secretReader.readLinearApiKey({ interactive: !options.noPrompt });
+  } catch (err) {
+    reporter.error(`human-handoff-linear doctor failed - ${err.message}`);
+    return 1;
+  }
+
+  if (!apiKey) {
+    reporter.error('human-handoff-linear doctor failed - LINEAR_API_KEY is not set.');
+    reporter.error('Export LINEAR_API_KEY or rerun without --no-prompt to be prompted.');
+    return exitCodeFor('missing_token');
+  }
+
+  // Promote the resolved key into the SecretReader port the use case sees,
+  // so the use case stays pure and reads the token through `read('LINEAR_API_KEY')`.
+  const portReader = createEnvironmentSecretReader({ LINEAR_API_KEY: apiKey });
+  const factory = workspaceFactory ?? (({ apiKey: key }) => createLinearGraphqlWorkspace({ apiKey: key, fetch: fetchImpl }));
+
+  let result;
+  try {
+    result = await createDoctorUseCase({
+      reporter,
+      secretReader: portReader,
+      workspaceFactory: factory,
+    })({ ...options, tokenRequired: true });
+  } catch (err) {
+    reporter.error(`human-handoff-linear doctor failed - ${err.message}`);
+    return 1;
+  }
+
+  if (result.ok) {
+    stdout.write('human-handoff-linear doctor complete - no mutations performed\n');
+    return 0;
+  }
+
+  const failingCheck = result.checks.find((c) => !c.ok);
+  return exitCodeFor(failingCheck?.error ?? { kind: 'unknown' });
+}
+
 async function dispatchCommand({ command, options, reporter, secretReader, workspace }) {
   if (command === 'setup') {
     return createSetupUseCase({ reporter, secretReader, workspace })(options);
@@ -61,9 +120,6 @@ async function dispatchCommand({ command, options, reporter, secretReader, works
   if (command === 'sync-template') {
     const templateBody = await readFile(TEMPLATE_PATH, 'utf8');
     return createSyncTemplateUseCase({ reporter, templateBody, workspace })(options);
-  }
-  if (command === 'doctor') {
-    return createDoctorUseCase({ reporter, secretReader })(options);
   }
   if (command === 'bootstrap-project') {
     return createBootstrapProjectUseCase({ reporter, workspace })(options);
@@ -73,41 +129,25 @@ async function dispatchCommand({ command, options, reporter, secretReader, works
 
 function parseArgs(argv) {
   const args = [...argv];
-  const options = { dryRun: true, quiet: false, verbose: false, team: null };
+  const options = { dryRun: true, quiet: false, verbose: false, team: null, noPrompt: false };
   let help = false;
   let command = null;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === '--help' || arg === '-h') {
-      help = true;
-      continue;
-    }
-    if (arg === '--quiet' || arg === '-q') {
-      options.quiet = true;
-      continue;
-    }
-    if (arg === '--verbose' || arg === '-v') {
-      options.verbose = true;
-      continue;
-    }
+    if (arg === '--help' || arg === '-h') { help = true; continue; }
+    if (arg === '--quiet' || arg === '-q') { options.quiet = true; continue; }
+    if (arg === '--verbose' || arg === '-v') { options.verbose = true; continue; }
+    if (arg === '--no-prompt') { options.noPrompt = true; continue; }
     if (arg === '--team') {
       if (args[i + 1] === undefined) return { options, error: '--team requires a value' };
       options.team = args[i + 1];
       i += 1;
       continue;
     }
-    if (arg.startsWith('--team=')) {
-      options.team = arg.slice('--team='.length);
-      continue;
-    }
-    if (arg.startsWith('-')) {
-      return { options, error: `Unknown option: ${arg}` };
-    }
-    if (command === null) {
-      command = arg;
-      continue;
-    }
+    if (arg.startsWith('--team=')) { options.team = arg.slice('--team='.length); continue; }
+    if (arg.startsWith('-')) return { options, error: `Unknown option: ${arg}` };
+    if (command === null) { command = arg; continue; }
     return { options, error: `Unexpected argument: ${arg}` };
   }
 
@@ -130,11 +170,20 @@ ${rows}
 
 Options:
   --team <key>       Linear team key for future setup/bootstrap operations
+  --no-prompt        Disable interactive prompts (for CI / non-TTY environments)
   -q, --quiet        Print only final outcome and errors
   -v, --verbose      Print additional diagnostic detail
   -h, --help         Show this help
 
+Auth:
+  doctor reads the Linear API key from LINEAR_API_KEY. When unset and stdin is
+  a TTY, it prompts for the key without echoing. Pass --no-prompt to skip the
+  prompt and exit with a missing-token error instead.
+
+  Create a personal API key at https://linear.app/settings/api.
+
 Current scaffold behavior:
-  Commands validate routing and contracts only. No Linear mutations are performed.
+  setup, sync-template, and bootstrap-project validate routing and contracts
+  only. No Linear mutations are performed by those commands.
 `;
 }

@@ -9,7 +9,7 @@ export const HUMAN_HANDOFF_LINEAR_COMMANDS = Object.freeze([
   }),
   Object.freeze({
     name: 'doctor',
-    summary: 'Check local CLI readiness without contacting Linear.',
+    summary: 'Validate the Linear API token by fetching the viewer/workspace (read-only).',
   }),
   Object.freeze({
     name: 'bootstrap-project',
