@@ -1,27 +1,59 @@
-import { createLinearTeamSelector, createSetupCommand } from '../values.mjs';
+import { ensureHumanHandoffLabels } from './ensure-human-handoff-labels.mjs';
+import { createSetupCommand } from '../values.mjs';
 
-export function createSetupUseCase({ reporter, secretReader, workspace }) {
+export function createSetupUseCase({ reporter, workspace }) {
   return async function setup(input = {}) {
     const command = createSetupCommand('setup', input);
-    const team = createLinearTeamSelector(input.team);
-    const token = await secretReader.read('LINEAR_API_KEY');
+    const label = {
+      name: input.labelName,
+      color: input.color,
+      description: input.description,
+    };
 
-    reporter.info('human-handoff-linear setup - validating package contract');
-    reporter.info('No Linear mutations will be performed by this scaffold.');
+    reporter.info(`human-handoff-linear setup - ensuring human handoff labels${input.dryRun ? ' (dry run)' : ''}.`);
 
-    if (token) {
-      reporter.info('Linear token: present');
-    } else {
-      reporter.info('Linear token: not set; future mutation commands will require LINEAR_API_KEY.');
+    const results = await ensureHumanHandoffLabels({
+      workspace,
+      teamRefs: input.teamRefs ?? [],
+      allTeams: input.allTeams === true,
+      dryRun: input.dryRun === true,
+      label,
+    });
+
+    for (const result of results) {
+      reporter.info(formatResult(result));
     }
 
-    if (workspace?.describe) await workspace.describe();
+    const summary = summarize(results);
+    if (input.dryRun === true) {
+      reporter.info(`dry run complete: ${summary.wouldCreate} would create, ${summary.exists} already present; no Linear changes made.`);
+    } else {
+      reporter.info(`setup complete: ${summary.created} created, ${summary.exists} already present.`);
+    }
 
     return Object.freeze({
       command,
-      team,
-      mutationsPerformed: 0,
-      tokenPresent: Boolean(token),
+      results: Object.freeze(results),
+      mutationsPerformed: summary.created,
     });
+  };
+}
+
+function formatResult(result) {
+  const team = `${result.team.key} (${result.team.name})`;
+  if (result.status === 'exists') {
+    return `already present: ${team} has "${result.label.name}" (${result.label.id})`;
+  }
+  if (result.status === 'would-create') {
+    return `would create: ${team} would receive "${result.label.name}"`;
+  }
+  return `created: ${team} received "${result.label.name}" (${result.label.id})`;
+}
+
+function summarize(results) {
+  return {
+    exists: results.filter((r) => r.status === 'exists').length,
+    created: results.filter((r) => r.status === 'created').length,
+    wouldCreate: results.filter((r) => r.status === 'would-create').length,
   };
 }

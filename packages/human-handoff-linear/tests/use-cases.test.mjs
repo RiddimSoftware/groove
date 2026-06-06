@@ -24,16 +24,21 @@ function memoryReporter() {
   };
 }
 
-function fakeWorkspace({ getViewer } = {}) {
+function fakeWorkspace({ getViewer, labelsByTeam = {}, teams = [] } = {}) {
+  const createdLabels = [];
   return {
+    createdLabels,
     getViewer: getViewer ?? (async () => ({
       viewer: { id: 'u', name: 'Ada Lovelace' },
       organization: { id: 'o', name: 'Riddim', urlKey: 'riddim' },
     })),
     describe: () => ({ connected: true }),
-    listTeams: async () => [],
-    listLabels: async () => [],
-    createLabel: async () => { throw new Error('doctor must not mutate'); },
+    listTeams: async () => teams,
+    listLabels: async ({ teamId }) => labelsByTeam[teamId] ?? [],
+    createLabel: async (input) => {
+      createdLabels.push(input);
+      return { id: `label-${input.teamId}`, ...input };
+    },
     getTemplate: async () => null,
     createTemplate: async () => { throw new Error('doctor must not mutate'); },
     updateTemplate: async () => { throw new Error('doctor must not mutate'); },
@@ -63,18 +68,33 @@ test('package contract describes doctor as a Linear auth validator (not a local-
   assert.match(doctor.summary, /validate.+Linear.+(token|viewer|auth)/i);
 });
 
-test('setup use case uses injected ports and performs no mutations', async () => {
+test('setup use case ensures missing labels and detects existing labels case-insensitively', async () => {
   const { messages, reporter } = memoryReporter();
+  const workspace = fakeWorkspace({
+    teams: [
+      { id: 'team-grv', key: 'GRV', name: 'Groove' },
+      { id: 'team-web', key: 'WEB', name: 'Web' },
+    ],
+    labelsByTeam: {
+      'team-web': [{ id: 'label-web', name: 'Human-Handoff', color: '#f59e0b', description: null }],
+    },
+  });
   const result = await createSetupUseCase({
     reporter,
-    secretReader: { read: () => null },
-    workspace: { describe: () => ({ connected: false }) },
-  })({ team: 'GRV' });
+    workspace,
+  })({ teamRefs: ['GRV', 'WEB'] });
 
   assert.equal(result.command.name, 'setup');
-  assert.equal(result.team.teamKey, 'GRV');
-  assert.equal(result.mutationsPerformed, 0);
-  assert.match(messages.map((entry) => entry.message).join('\n'), /No Linear mutations/);
+  assert.equal(result.mutationsPerformed, 1);
+  assert.deepEqual(workspace.createdLabels, [{
+    teamId: 'team-grv',
+    name: 'human-handoff',
+    color: '#f59e0b',
+    description: 'Marks the project issue where human-only blockers are tracked.',
+  }]);
+  const output = messages.map((entry) => entry.message).join('\n');
+  assert.match(output, /created: GRV/);
+  assert.match(output, /already present: WEB/);
 });
 
 test('doctor: tokenRequired=false (scaffold opt-out) keeps the old non-blocking behavior', async () => {

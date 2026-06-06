@@ -1,6 +1,6 @@
 # Use Case Catalog
 
-The canonical catalog of every application-layer use case in `llm-cost-attribution`:
+The canonical catalog of every application-layer use case in Groove packages:
 its actor, goal, entities/values, ports, primary adapters, and the inward boundary
 rule it relies on. Each entry names its `Current implementation` so the catalog and
 the source stay traceable.
@@ -15,6 +15,22 @@ must stay aligned with the modules cataloged here.
 
 **Convention:** every PR that adds or changes a use case updates this catalog in the
 same PR.
+
+## human-handoff-linear
+
+### EnsureHumanHandoffLabels
+Actor: Operator
+Goal: Ensure selected Linear teams each have a `human-handoff` issue label so the project's single Human Handoff issue is discoverable by agents, filters, and humans.
+Inputs: Linear team refs as keys or UUIDs, or all accessible teams; IssueLabelSpec; dry-run mode.
+Outputs: LabelEnsureResult per selected team: already present, would create, or created.
+Entities / values: LinearTeamRef, IssueLabelSpec, LabelEnsureResult.
+Ports: LinearWorkspace.
+Primary adapters: Linear GraphQL workspace adapter, CLI team selector parser.
+Current implementation: `packages/human-handoff-linear/src/use-cases/ensure-human-handoff-labels.mjs`
+
+Boundary rule: `EnsureHumanHandoffLabels` imports no CLI, process, fetch, HTTP, or GraphQL code. The Linear API adapter lives at the package edge in `src/adapters/linear-graphql-workspace.mjs`.
+
+## llm-cost-attribution
 
 ### ForecastIssueCost
 Actor: Operator

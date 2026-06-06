@@ -8,6 +8,15 @@ export { createSetupUseCase } from './use-cases/setup.mjs';
 export { createSyncTemplateUseCase } from './use-cases/sync-template.mjs';
 export { createDoctorUseCase } from './use-cases/doctor.mjs';
 export { createBootstrapProjectUseCase } from './use-cases/bootstrap-project.mjs';
+export { ensureHumanHandoffLabels } from './use-cases/ensure-human-handoff-labels.mjs';
+export {
+  DEFAULT_HUMAN_HANDOFF_LABEL,
+  InvalidTeamSelectionError,
+  UnknownLinearTeamError,
+  issueLabelSpec,
+  labelEnsureResult,
+  linearTeamRef,
+} from './labels.mjs';
 
 export { createEnvironmentSecretReader } from './adapters/environment-secret-reader.mjs';
 export { createInteractiveSecretReader } from './adapters/interactive-secret-reader.mjs';

@@ -28,6 +28,7 @@ import {
 } from '../errors.mjs';
 
 export const LINEAR_GRAPHQL_ENDPOINT = 'https://api.linear.app/graphql';
+const PAGE_SIZE = 100;
 
 /**
  * @param {object} opts
@@ -122,26 +123,49 @@ export function createLinearGraphqlWorkspace({
     },
 
     async listTeams() {
-      const data = await graphql(`query Teams { teams(first: 100) { nodes { id key name } } }`);
-      return data?.teams?.nodes?.map((t) => ({ id: t.id, key: t.key, name: t.name })) ?? [];
+      const teams = [];
+      for (let after; ;) {
+        const data = await graphql(
+          `query Teams($first: Int!, $after: String) {
+            teams(first: $first, after: $after) {
+              nodes { id key name }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+          { first: PAGE_SIZE, after },
+        );
+        const page = data?.teams;
+        teams.push(...(page?.nodes?.map((t) => ({ id: t.id, key: t.key, name: t.name })) ?? []));
+        if (page?.pageInfo?.hasNextPage !== true) break;
+        after = page.pageInfo.endCursor;
+      }
+      return teams;
     },
 
     async listLabels({ teamId } = {}) {
-      const data = await graphql(
-        `query Labels($teamId: ID) {
-          issueLabels(first: 250, filter: { team: { id: { eq: $teamId } } }) {
-            nodes { id name color teamId description }
-          }
-        }`,
-        { teamId: teamId ?? null },
-      );
-      return data?.issueLabels?.nodes?.map((l) => ({
-        id: l.id,
-        name: l.name,
-        color: l.color,
-        teamId: l.teamId,
-        description: l.description ?? null,
-      })) ?? [];
+      const labels = [];
+      for (let after; ;) {
+        const data = await graphql(
+          `query Labels($teamId: ID, $first: Int!, $after: String) {
+            issueLabels(first: $first, after: $after, filter: { team: { id: { eq: $teamId } } }) {
+              nodes { id name color teamId description }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+          { teamId: teamId ?? null, first: PAGE_SIZE, after },
+        );
+        const page = data?.issueLabels;
+        labels.push(...(page?.nodes?.map((l) => ({
+          id: l.id,
+          name: l.name,
+          color: l.color,
+          teamId: l.teamId,
+          description: l.description ?? null,
+        })) ?? []));
+        if (page?.pageInfo?.hasNextPage !== true) break;
+        after = page.pageInfo.endCursor;
+      }
+      return labels;
     },
 
     async createLabel({ teamId, name, color, description } = {}) {

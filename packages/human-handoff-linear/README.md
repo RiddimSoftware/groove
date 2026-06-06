@@ -1,17 +1,18 @@
 # human-handoff-linear
 
 Linear workflow primitives for installing and maintaining the Human Handoff
-issue template used by autonomous project workflows.
+issue template and team labels used by autonomous project workflows.
 
-Today the package ships two real Linear commands:
+Today the package ships three real Linear commands:
 
 - `doctor` — read-only auth and viewer/organization check.
+- `setup` — ensure selected Linear teams have the `human-handoff` issue label.
 - `sync-template` — provision the workspace-level `Human Handoff` issue
   template idempotently: create it if missing, update its body when the
   bundled markdown drifts, report no-change when already in sync.
 
-`setup` and `bootstrap-project` remain scaffold-only and perform no Linear
-mutations; later issues will wire them to the same `LinearWorkspace` adapter.
+`bootstrap-project` remains scaffold-only and performs no Linear mutations;
+later issues will wire it to the same `LinearWorkspace` adapter.
 
 ## Requirements
 
@@ -21,16 +22,14 @@ mutations; later issues will wire them to the same `LinearWorkspace` adapter.
 
 ## Auth
 
-The CLI reads the API key from the `LINEAR_API_KEY` environment variable.
+The CLI reads the API key from `LINEAR_API_KEY` or `LINEAR_API_TOKEN`.
 
 ```bash
-export LINEAR_API_KEY=lin_api_…
+export LINEAR_API_KEY=lin_api_...
 ```
 
-If the variable is unset and you run from an interactive terminal, the CLI
-prompts for the key without echoing it. Pass `--no-prompt` to disable that
-fallback (use in CI, where there is no TTY anyway). The key is never logged,
-written to disk, or echoed back.
+The `doctor` command can also prompt for the key in an interactive terminal.
+The key is never logged, written to disk, or echoed back.
 
 ## CLI
 
@@ -40,13 +39,52 @@ npx human-handoff-linear --help
 
 Subcommands:
 
-- `doctor` — validate the Linear API token by fetching the current viewer and
+- `setup` - ensure selected Linear teams have the `human-handoff` issue label.
+- `doctor` - validate the Linear API token by fetching the current viewer and
   workspace. Read-only: never creates or updates templates, labels, issues, or
   relations.
 - `sync-template` — create or update the workspace-level `Human Handoff` issue
   template idempotently. Pass `--dry-run` to plan without writing.
-- `setup`, `bootstrap-project` — scaffold-only today; reserved command surfaces
-  that later issues will wire to real Linear mutations.
+- `bootstrap-project` — scaffold-only today; reserved command surface that
+  later issues will wire to real Linear mutations.
+
+### `setup`
+
+```bash
+npx human-handoff-linear setup --team GRV --team WEB
+```
+
+The command accepts team keys or Linear team UUIDs. Existing labels are detected
+case-insensitively, so `Human-Handoff` satisfies the requirement and will not be
+duplicated.
+
+To preview changes:
+
+```bash
+npx human-handoff-linear setup --team GRV,WEB --dry-run
+```
+
+To ensure every Linear team visible to the API key:
+
+```bash
+npx human-handoff-linear setup --all-teams
+```
+
+Default label spec:
+
+| Field | Default |
+| --- | --- |
+| Name | `human-handoff` |
+| Color | `#f59e0b` |
+| Description | `Marks the project issue where human-only blockers are tracked.` |
+
+Override the defaults when a workspace needs different label metadata:
+
+```bash
+npx human-handoff-linear setup --team GRV \
+  --color '#d97706' \
+  --description 'Tracks human-only project blockers.'
+```
 
 ### `sync-template`
 
@@ -106,16 +144,22 @@ import {
   createDoctorUseCase,
   createLinearGraphqlWorkspace,
   createSyncTemplateUseCase,
+  ensureHumanHandoffLabels,
 } from 'human-handoff-linear';
 
 const workspace = createLinearGraphqlWorkspace({ apiKey: process.env.LINEAR_API_KEY });
+const result = await ensureHumanHandoffLabels({
+  workspace,
+  teamRefs: ['GRV'],
+});
+
 const reporter = { info: console.log, error: console.error };
 
 // Read-only auth check
 const doctor = createDoctorUseCase({
   reporter,
   secretReader: { read: (name) => process.env[name] },
-  workspace,
+  workspaceFactory: ({ apiKey }) => createLinearGraphqlWorkspace({ apiKey }),
 });
 const auth = await doctor();
 if (!auth.ok) process.exit(1);
@@ -123,25 +167,25 @@ if (!auth.ok) process.exit(1);
 // Idempotent template sync
 const templateBody = await readFile('./templates/human-handoff-issue-body.md', 'utf8');
 const sync = createSyncTemplateUseCase({ reporter, templateBody, workspace });
-const result = await sync({ dryRun: false });
+const syncResult = await sync({ dryRun: false });
 // → { action: 'create' | 'update' | 'no-change', templateId, mutationsPerformed, ... }
 ```
 
 Ports are plain objects:
 
-- `ConsoleReporter` — receives `info`, `error`, and optional `verbose` messages.
-- `SecretReader` — resolves secrets such as `LINEAR_API_KEY`.
-- `LinearWorkspace` — adapter boundary for Linear workspace operations.
+- `ConsoleReporter` - receives `info`, `error`, and optional `verbose` messages.
+- `SecretReader` - resolves secrets such as `LINEAR_API_KEY`.
+- `LinearWorkspace` - adapter boundary for Linear workspace operations.
 
 The full LinearWorkspace surface (`getViewer`, `listTeams`, `listLabels`,
 `createLabel`, `getTemplate`, `createTemplate`, `updateTemplate`,
 `createIssue`, `createRelation`) is implemented by
-`createLinearGraphqlWorkspace`. Later mutating commands build on these
-methods; they do not implement their own GraphQL.
+`createLinearGraphqlWorkspace`. Mutating commands build on these methods; they
+do not implement their own GraphQL.
 
-Core use-case modules do not read environment variables, call `fetch`, or
-exit the process. Those responsibilities stay in CLI/adapter code (enforced
-by `tests/boundary.test.mjs`).
+Core use-case modules do not read environment variables, call `fetch`, or exit
+the process. Those responsibilities stay in CLI/adapter code (enforced by
+`tests/boundary.test.mjs`).
 
 ## Template
 
