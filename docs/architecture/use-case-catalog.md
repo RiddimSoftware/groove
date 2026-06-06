@@ -179,3 +179,14 @@ Ports: SecretReader, LinearWorkspace (only `getViewer` is called).
 Primary adapters: `createInteractiveSecretReader` (env + hidden TTY prompt), `createLinearGraphqlWorkspace` (HTTPS GraphQL with injected `fetch` for tests), `createStreamConsoleReporter`.
 Notes: core use case imports no fetch/env/child_process (enforced by `tests/boundary.test.mjs`). Tests cover GraphQL HTTP errors (401/403/429), GraphQL `errors[]` shapes, network failure, and the missing-token path through injected fetch and stub workspaces — no real Linear API token is required.
 Current implementation: `packages/human-handoff-linear/src/use-cases/doctor.mjs`
+
+### BootstrapProjectHumanHandoff
+Actor: Workflow operator
+Goal: Add or reuse the final Human Handoff issue for an existing Linear Project, and wire every sibling implementation issue as a `blocks` relation pointing at that HH issue, so the workflow contract (one project, one HH issue, blocked until siblings are done) is operational rather than just documented.
+Inputs: project id or slug, optional team key (required when the project spans multiple teams), checked-in Human Handoff template body, dry-run/apply flag.
+Outputs: BootstrapResult `{ command, dryRun, project, team, humanHandoff: { decision, issue, spec }, siblings, relations: { planned, created, skipped }, mutationsPerformed }` where `decision ∈ {create, reuse}` and `relations.planned` carries one entry per sibling (action `plan`, `create`, or `skip`).
+Entities / values: LinearProjectRef, HumanHandoffIssueSpec, IssueRelationPlan, HumanHandoffTemplateBody (reused for the issue description).
+Ports: LinearWorkspace (`getProject`, `listProjectIssues`, `listTeams`, `listLabels`, `getTemplate`, `listWorkflowStates`, `listIssueRelations` for read; `createIssue`, `createRelation` for apply), ConsoleReporter.
+Primary adapters: `createLinearGraphqlWorkspace` (Linear GraphQL HTTP), `createStreamConsoleReporter`, in-memory stub workspaces in tests.
+Notes: idempotent by construction — an HH issue is identified by the `human-handoff` label inside the project, and existing `blocks` relations are skipped rather than recreated. Fails closed when the project, the `human-handoff` label, or the `Human Handoff` template is missing; the use case never creates labels or templates implicitly. Core module imports no fetch/env/child_process (enforced by `tests/boundary.test.mjs`); tests cover empty project, sibling-only project, existing-HH reuse, duplicate-relation skipping, dry-run reporting, missing label/template errors, and multi-team selection.
+Current implementation: `packages/human-handoff-linear/src/use-cases/bootstrap-project.mjs`

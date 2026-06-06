@@ -13,7 +13,7 @@ export const HUMAN_HANDOFF_LINEAR_COMMANDS = Object.freeze([
   }),
   Object.freeze({
     name: 'bootstrap-project',
-    summary: 'Reserve the project bootstrap command surface for later implementation.',
+    summary: 'Bootstrap the final Human Handoff issue for a Linear project and wire blocks relations from every sibling issue.',
   }),
 ]);
 
@@ -22,7 +22,14 @@ export function defineHumanHandoffLinearPackageContract() {
     commandName: 'human-handoff-linear',
     commands: HUMAN_HANDOFF_LINEAR_COMMANDS,
     ports: Object.freeze(['LinearWorkspace', 'ConsoleReporter', 'SecretReader']),
-    values: Object.freeze(['SetupCommand', 'LinearTeamSelector', 'HumanHandoffTemplateBody']),
-    mutationPolicy: 'setup-mutates-labels; other scaffold commands are no-op',
+    values: Object.freeze([
+      'SetupCommand',
+      'LinearTeamSelector',
+      'LinearProjectRef',
+      'HumanHandoffTemplateBody',
+      'HumanHandoffIssueSpec',
+      'IssueRelationPlan',
+    ]),
+    mutationPolicy: 'setup-mutates-labels; sync-template and bootstrap-project mutate Linear',
   });
 }

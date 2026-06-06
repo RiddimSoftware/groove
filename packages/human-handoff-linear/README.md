@@ -3,16 +3,16 @@
 Linear workflow primitives for installing and maintaining the Human Handoff
 issue template and team labels used by autonomous project workflows.
 
-Today the package ships three real Linear commands:
+Today the package ships four real Linear commands:
 
 - `doctor` — read-only auth and viewer/organization check.
 - `setup` — ensure selected Linear teams have the `human-handoff` issue label.
 - `sync-template` — provision the workspace-level `Human Handoff` issue
   template idempotently: create it if missing, update its body when the
   bundled markdown drifts, report no-change when already in sync.
-
-`bootstrap-project` remains scaffold-only and performs no Linear mutations;
-later issues will wire it to the same `LinearWorkspace` adapter.
+- `bootstrap-project` — create (or reuse) the final Human Handoff issue for
+  an existing Linear Project and wire `blocks` relations from every sibling
+  implementation issue. Idempotent on every re-run.
 
 ## Requirements
 
@@ -28,8 +28,9 @@ The CLI reads the API key from `LINEAR_API_KEY` or `LINEAR_API_TOKEN`.
 export LINEAR_API_KEY=lin_api_...
 ```
 
-The `doctor` command can also prompt for the key in an interactive terminal.
-The key is never logged, written to disk, or echoed back.
+The `doctor`, `sync-template`, and `bootstrap-project` commands can also
+prompt for the key in an interactive terminal. The key is never logged,
+written to disk, or echoed back.
 
 ## CLI
 
@@ -45,8 +46,9 @@ Subcommands:
   relations.
 - `sync-template` — create or update the workspace-level `Human Handoff` issue
   template idempotently. Pass `--dry-run` to plan without writing.
-- `bootstrap-project` — scaffold-only today; reserved command surface that
-  later issues will wire to real Linear mutations.
+- `bootstrap-project` — create or reuse the final Human Handoff issue for a
+  Linear Project and wire `blocks` relations from every sibling implementation
+  issue. Pass `--dry-run` to plan without writing.
 
 ### `setup`
 
@@ -133,6 +135,40 @@ Failure cases map to stable exit codes for scripting:
 | Other GraphQL or HTTP error | `[api]` | 7 |
 | Other / unknown | (no prefix) | 1 |
 
+### `bootstrap-project`
+
+Bootstrap the final Human Handoff issue for an existing Linear Project, and
+wire `blocks` relations from every sibling implementation issue so the HH
+issue stays blocked until the rest of the project is complete.
+
+```bash
+# Apply (default): create the HH issue if missing and the missing blocks
+# relations.
+human-handoff-linear bootstrap-project --project <id-or-slug>
+
+# Dry-run: report the HH create/reuse decision and every planned blocks
+# relation without mutating Linear.
+human-handoff-linear bootstrap-project --project <id-or-slug> --dry-run
+```
+
+Behavior:
+
+- Looks up the Linear Project by id or slug and reads its issues.
+- Resolves the target team from the project (pass `--team <key>` when the
+  project spans multiple teams).
+- Reuses any existing issue in the project that carries the `human-handoff`
+  label; otherwise creates one titled `Human handoff for <Project name>`,
+  applies the `human-handoff` label, attaches the `Human Handoff` template,
+  starts it in the team's `Backlog` (or `Todo`) state, and leaves the estimate
+  unset.
+- For every non-HH sibling issue in the project, creates a `blocks` relation
+  (sibling → HH) — skipping any relation that already exists. Re-running the
+  command therefore never duplicates issues or relations.
+
+Fails closed when the project, the `human-handoff` label, or the `Human
+Handoff` template is missing. Install those primitives via `setup` and
+`sync-template` before running `bootstrap-project`.
+
 ## Application API
 
 The CLI adapter is deliberately thin. Core behavior is available as use-case
@@ -141,6 +177,7 @@ modules with injected ports:
 ```js
 import { readFile } from 'node:fs/promises';
 import {
+  createBootstrapProjectUseCase,
   createDoctorUseCase,
   createLinearGraphqlWorkspace,
   createSyncTemplateUseCase,
@@ -169,6 +206,11 @@ const templateBody = await readFile('./templates/human-handoff-issue-body.md', '
 const sync = createSyncTemplateUseCase({ reporter, templateBody, workspace });
 const syncResult = await sync({ dryRun: false });
 // → { action: 'create' | 'update' | 'no-change', templateId, mutationsPerformed, ... }
+
+// Idempotent project HH-issue bootstrap
+const bootstrap = createBootstrapProjectUseCase({ reporter, workspace, templateBody });
+const bootstrapResult = await bootstrap({ project: 'prj_or_slug', dryRun: false });
+// → { humanHandoff: { decision, issue, spec }, relations: { created, skipped, planned }, ... }
 ```
 
 Ports are plain objects:
@@ -179,9 +221,10 @@ Ports are plain objects:
 
 The full LinearWorkspace surface (`getViewer`, `listTeams`, `listLabels`,
 `createLabel`, `getTemplate`, `createTemplate`, `updateTemplate`,
-`createIssue`, `createRelation`) is implemented by
-`createLinearGraphqlWorkspace`. Mutating commands build on these methods; they
-do not implement their own GraphQL.
+`createIssue`, `createRelation`, `getProject`, `listProjectIssues`,
+`listIssueRelations`, `listWorkflowStates`) is implemented by
+`createLinearGraphqlWorkspace`. The mutating commands compose these methods;
+they do not implement their own GraphQL.
 
 Core use-case modules do not read environment variables, call `fetch`, or exit
 the process. Those responsibilities stay in CLI/adapter code (enforced by

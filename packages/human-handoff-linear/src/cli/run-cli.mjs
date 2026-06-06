@@ -79,6 +79,19 @@ export async function runCli({ argv, env, stdout, stderr, stdin = null, fetch: f
     });
   }
 
+  if (command === 'bootstrap-project') {
+    return runBootstrapProjectCommand({
+      options: parsed.options,
+      env,
+      stdin,
+      stdout,
+      stderr,
+      reporter,
+      fetchImpl,
+      workspaceFactory,
+    });
+  }
+
   const secretReader = createEnvironmentSecretReader(env);
   const workspace = createNoopLinearWorkspace();
 
@@ -153,6 +166,61 @@ async function runSetupCommand({ options, env, reporter, fetchImpl, workspaceFac
   }
 }
 
+async function runBootstrapProjectCommand({ options, env, stdin, stdout, stderr, reporter, fetchImpl, workspaceFactory }) {
+  if (!options.project) {
+    reporter.error('human-handoff-linear bootstrap-project failed - --project <id-or-slug> is required.');
+    return 1;
+  }
+
+  const secretReader = createInteractiveSecretReader({ env, stdin, stdout });
+
+  let apiKey = null;
+  try {
+    apiKey = await secretReader.readLinearApiKey({ interactive: !options.noPrompt });
+  } catch (err) {
+    reporter.error(`human-handoff-linear bootstrap-project failed - ${err.message}`);
+    return 1;
+  }
+  if (!apiKey) {
+    reporter.error('human-handoff-linear bootstrap-project failed - LINEAR_API_KEY is not set.');
+    reporter.error('Export LINEAR_API_KEY or rerun without --no-prompt to be prompted.');
+    return exitCodeFor('missing_token');
+  }
+
+  const factory = workspaceFactory ?? (({ apiKey: key }) => createLinearGraphqlWorkspace({ apiKey: key, fetch: fetchImpl }));
+  let workspace;
+  try {
+    workspace = factory({ apiKey });
+  } catch (err) {
+    reporter.error(`human-handoff-linear bootstrap-project failed - ${err.message}`);
+    return exitCodeFor(err);
+  }
+
+  const templateBody = await readFile(TEMPLATE_PATH, 'utf8');
+
+  try {
+    const result = await createBootstrapProjectUseCase({
+      reporter,
+      workspace,
+      templateBody,
+    })({
+      project: options.project,
+      team: options.team,
+      dryRun: options.dryRun,
+    });
+
+    if (result.dryRun) {
+      stdout.write('human-handoff-linear bootstrap-project complete (dry-run) - no mutations performed\n');
+    } else {
+      stdout.write(`human-handoff-linear bootstrap-project complete - ${result.mutationsPerformed} mutation(s) performed\n`);
+    }
+    return 0;
+  } catch (err) {
+    reporter.error(`human-handoff-linear bootstrap-project failed - ${err.message}`);
+    return exitCodeFor(err);
+  }
+}
+
 async function runDoctorCommand({ options, env, stdin, stdout, stderr, reporter, fetchImpl, workspaceFactory }) {
   const secretReader = createInteractiveSecretReader({ env, stdin, stdout });
 
@@ -196,17 +264,7 @@ async function runDoctorCommand({ options, env, stdin, stdout, stderr, reporter,
   return exitCodeFor(failingCheck?.error ?? { kind: 'unknown' });
 }
 
-async function dispatchCommand({ command, options, reporter, secretReader, workspace }) {
-  if (command === 'setup') {
-    return createSetupUseCase({ reporter, secretReader, workspace })(options);
-  }
-  if (command === 'sync-template') {
-    const templateBody = await readFile(TEMPLATE_PATH, 'utf8');
-    return createSyncTemplateUseCase({ reporter, templateBody, workspace })(options);
-  }
-  if (command === 'bootstrap-project') {
-    return createBootstrapProjectUseCase({ reporter, workspace })(options);
-  }
+async function dispatchCommand({ command }) {
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -219,6 +277,7 @@ function parseArgs(argv) {
     team: null,
     teamRefs: [],
     allTeams: false,
+    project: null,
     noPrompt: false,
     color: undefined,
     description: undefined,
@@ -242,6 +301,13 @@ function parseArgs(argv) {
       continue;
     }
     if (arg.startsWith('--team=')) { addTeamRefs(options, arg.slice('--team='.length)); continue; }
+    if (arg === '--project') {
+      if (args[i + 1] === undefined) return { options, error: '--project requires a value' };
+      options.project = args[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--project=')) { options.project = arg.slice('--project='.length); continue; }
     if (arg === '--color') {
       if (args[i + 1] === undefined) return { options, error: '--color requires a value' };
       options.color = args[i + 1];
@@ -266,12 +332,6 @@ function parseArgs(argv) {
     if (arg.startsWith('-')) return { options, error: `Unknown option: ${arg}` };
     if (command === null) { command = arg; continue; }
     return { options, error: `Unexpected argument: ${arg}` };
-  }
-
-  // bootstrap-project remains scaffold-only, so it defaults to dry-run / no-op.
-  // setup and sync-template perform real Linear writes unless --dry-run is set.
-  if (command === 'bootstrap-project') {
-    options.dryRun = true;
   }
 
   return { command, help, options };
@@ -301,9 +361,12 @@ Commands:
 ${rows}
 
 Options:
-  --team <key>       Linear team key or UUID. Repeat or comma-separate for setup.
+  --project <ref>    Linear project id or slug (bootstrap-project)
+  --team <key>       Linear team key or UUID. Repeat or comma-separate for
+                     setup; required for bootstrap-project when the project
+                     spans multiple teams.
   --all-teams        Setup every accessible Linear team
-  --dry-run          Report setup label changes or sync-template actions
+  --dry-run          Plan only — print the action the command would take
                      without calling any Linear write mutation.
   --color <hex>      Override setup label color
   --description <s>  Override setup label description
@@ -314,24 +377,21 @@ Options:
   -h, --help         Show this help
 
 Auth:
-  doctor, setup, and sync-template read the Linear API key from LINEAR_API_KEY.
-  setup also accepts LINEAR_API_TOKEN. doctor and sync-template can prompt for
-  the key in an interactive terminal. Pass --no-prompt to skip the prompt and
-  exit with a missing-token error instead.
+  Commands that talk to Linear read the API key from LINEAR_API_KEY (setup
+  also accepts LINEAR_API_TOKEN). doctor, sync-template, and bootstrap-project
+  can prompt for the key in an interactive terminal. Pass --no-prompt to skip
+  the prompt and exit with a missing-token error instead.
 
   Create a personal API key at https://linear.app/settings/api.
 
 Mutations:
-  sync-template performs real Linear writes — it creates the "Human Handoff"
-  workspace issue template if missing, updates it if the body drifted, and
-  reports no change when already in sync. Pass --dry-run to plan without
-  writing.
+  setup ensures each selected team has a human-handoff issue label.
+  sync-template creates or updates the workspace-level "Human Handoff" issue
+  template. bootstrap-project creates the final Human Handoff issue for a
+  Linear project and wires blocks relations from every sibling implementation
+  issue. All three default to applying; pass --dry-run to plan without
+  writing. doctor never mutates — it only validates auth.
 
-  setup ensures each selected team has a human-handoff issue label. Use
-  --dry-run to preview which teams would create labels.
-
-Current scaffold behavior:
-  bootstrap-project validates routing and contracts only. No Linear mutations
-  are performed by that command.
+  No Linear mutations are performed by --dry-run on any command.
 `;
 }

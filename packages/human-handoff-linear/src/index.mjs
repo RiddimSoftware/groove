@@ -1,7 +1,15 @@
 export {
+  BLOCKS_RELATION_TYPE,
+  HUMAN_HANDOFF_LABEL_NAME,
+  HUMAN_HANDOFF_TEMPLATE_NAME,
+  HUMAN_HANDOFF_TITLE_PREFIX,
+  createHumanHandoffIssueSpec,
   createHumanHandoffTemplateBody,
+  createIssueRelationPlan,
+  createLinearProjectRef,
   createLinearTeamSelector,
   createSetupCommand,
+  humanHandoffIssueTitle,
 } from './values.mjs';
 export { defineHumanHandoffLinearPackageContract } from './use-cases/define-human-handoff-linear-package-contract.mjs';
 export { createSetupUseCase } from './use-cases/setup.mjs';
