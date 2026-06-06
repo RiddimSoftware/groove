@@ -9,7 +9,10 @@
  *   listLabels, createLabel        — for the label-install command
  *   getTemplate, createTemplate,
  *   updateTemplate                 — for sync-template
- *   createIssue, createRelation    — for bootstrap-project
+ *   createIssue, createRelation,
+ *   getProject, listProjectIssues,
+ *   listIssueRelations,
+ *   listWorkflowStates             — for bootstrap-project
  *   syncHumanHandoffTemplate,
  *   bootstrapHumanHandoffProject   — port-required higher-level hooks, deferred
  *                                    to later issues; throw a typed error today
@@ -273,7 +276,7 @@ export function createLinearGraphqlWorkspace({
       return normalizeTemplate(result.template);
     },
 
-    async createIssue({ teamId, title, description, labelIds, templateId, projectId } = {}) {
+    async createIssue({ teamId, title, description, labelIds, templateId, projectId, stateId } = {}) {
       if (!teamId) throw new TypeError('createIssue requires { teamId }.');
       if (!title) throw new TypeError('createIssue requires { title }.');
       const input = { teamId, title };
@@ -281,6 +284,7 @@ export function createLinearGraphqlWorkspace({
       if (labelIds) input.labelIds = labelIds;
       if (templateId) input.templateId = templateId;
       if (projectId) input.projectId = projectId;
+      if (stateId) input.stateId = stateId;
       const data = await graphql(
         `mutation CreateIssue($input: IssueCreateInput!) {
           issueCreate(input: $input) {
@@ -300,6 +304,109 @@ export function createLinearGraphqlWorkspace({
         title: result.issue.title,
         url: result.issue.url,
       };
+    },
+
+    async getProject({ id } = {}) {
+      if (!id) throw new TypeError('getProject requires { id }.');
+      const data = await graphql(
+        `query Project($id: String!) {
+          project(id: $id) {
+            id
+            name
+            slugId
+            teams(first: 50) { nodes { id } }
+          }
+        }`,
+        { id },
+      );
+      const node = data?.project;
+      if (!node) return null;
+      return {
+        id: node.id,
+        name: node.name,
+        slugId: node.slugId ?? null,
+        teamIds: (node.teams?.nodes ?? []).map((t) => t.id),
+      };
+    },
+
+    async listProjectIssues({ projectId } = {}) {
+      if (!projectId) throw new TypeError('listProjectIssues requires { projectId }.');
+      const data = await graphql(
+        `query ProjectIssues($projectId: String!) {
+          project(id: $projectId) {
+            id
+            issues(first: 250) {
+              nodes {
+                id
+                identifier
+                title
+                labels(first: 50) { nodes { id name } }
+              }
+            }
+          }
+        }`,
+        { projectId },
+      );
+      const nodes = data?.project?.issues?.nodes ?? [];
+      return nodes.map((issue) => ({
+        id: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        labels: (issue.labels?.nodes ?? []).map((l) => ({ id: l.id, name: l.name })),
+      }));
+    },
+
+    async listIssueRelations({ issueId } = {}) {
+      if (!issueId) throw new TypeError('listIssueRelations requires { issueId }.');
+      const data = await graphql(
+        `query IssueRelations($issueId: String!) {
+          issue(id: $issueId) {
+            id
+            relations { nodes { id type issue { id } relatedIssue { id } } }
+            inverseRelations { nodes { id type issue { id } relatedIssue { id } } }
+          }
+        }`,
+        { issueId },
+      );
+      const issue = data?.issue;
+      if (!issue) return [];
+      const merged = [
+        ...(issue.relations?.nodes ?? []),
+        ...(issue.inverseRelations?.nodes ?? []),
+      ];
+      const seen = new Set();
+      const out = [];
+      for (const rel of merged) {
+        if (!rel?.id || seen.has(rel.id)) continue;
+        seen.add(rel.id);
+        out.push({
+          id: rel.id,
+          type: rel.type,
+          issueId: rel.issue?.id ?? null,
+          relatedIssueId: rel.relatedIssue?.id ?? null,
+        });
+      }
+      return out;
+    },
+
+    async listWorkflowStates({ teamId } = {}) {
+      if (!teamId) throw new TypeError('listWorkflowStates requires { teamId }.');
+      const data = await graphql(
+        `query WorkflowStates($teamId: String!) {
+          team(id: $teamId) {
+            id
+            states { nodes { id name type position } }
+          }
+        }`,
+        { teamId },
+      );
+      const nodes = data?.team?.states?.nodes ?? [];
+      return nodes.map((s) => ({
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        position: s.position ?? null,
+      }));
     },
 
     async createRelation({ issueId, relatedIssueId, type = 'related' } = {}) {

@@ -50,6 +50,28 @@
  * @property {string} title
  * @property {string} url
  *
+ * @typedef {Object} LinearProject
+ * @property {string} id
+ * @property {string} name
+ * @property {string=} slugId
+ * @property {string[]} teamIds
+ *
+ * @typedef {Object} LinearLabelRef
+ * @property {string} id
+ * @property {string} name
+ *
+ * @typedef {Object} LinearProjectIssue
+ * @property {string} id
+ * @property {string} identifier
+ * @property {string} title
+ * @property {LinearLabelRef[]} labels
+ *
+ * @typedef {Object} LinearWorkflowState
+ * @property {string} id
+ * @property {string} name
+ * @property {string} type
+ * @property {number=} position
+ *
  * @typedef {Object} LinearRelation
  * @property {string} id
  * @property {string} type
@@ -67,8 +89,12 @@
  * @property {(input: { id?: string, teamId?: string, name?: string }) => Promise<LinearTemplate | null>=} getTemplate
  * @property {(input: { teamId?: string, name: string, description?: string, type?: string }) => Promise<LinearTemplate>=} createTemplate
  * @property {(input: { id: string, name?: string, description?: string }) => Promise<LinearTemplate>=} updateTemplate
- * @property {(input: { teamId: string, title: string, description?: string, labelIds?: string[], templateId?: string, projectId?: string }) => Promise<LinearIssue>=} createIssue
+ * @property {(input: { teamId: string, title: string, description?: string, labelIds?: string[], templateId?: string, projectId?: string, stateId?: string }) => Promise<LinearIssue>=} createIssue
  * @property {(input: { issueId: string, relatedIssueId: string, type?: string }) => Promise<LinearRelation>=} createRelation
+ * @property {(input: { id: string }) => Promise<LinearProject | null>=} getProject
+ * @property {(input: { projectId: string }) => Promise<LinearProjectIssue[]>=} listProjectIssues
+ * @property {(input: { issueId: string }) => Promise<LinearRelation[]>=} listIssueRelations
+ * @property {(input: { teamId: string }) => Promise<LinearWorkflowState[]>=} listWorkflowStates
  * @property {(input: { body: string }) => Promise<unknown> | unknown=} syncHumanHandoffTemplate
  * @property {(input: { teamKey?: string | null }) => Promise<unknown> | unknown=} bootstrapHumanHandoffProject
  */

@@ -69,7 +69,7 @@ test('help output documents supported commands without requiring a Linear token'
   assert.match(result.stdout, /\bdoctor\b/);
   assert.match(result.stdout, /\bbootstrap-project\b/);
   assert.match(result.stdout, /setup ensures each selected team has a human-handoff issue label/);
-  assert.match(result.stdout, /bootstrap-project validates routing and contracts only/);
+  assert.match(result.stdout, /bootstrap-project creates the final Human Handoff issue/);
 });
 
 test('help output documents --no-prompt and the auth section', () => {
@@ -256,7 +256,6 @@ test('sync-template: no-change when existing description already matches', async
 });
 
 test('sync-template: API failure maps to a non-zero exit', async () => {
-  const { LinearAuthError } = await import('../src/errors.mjs');
   const { stdout, stderr, errors } = captureStreams();
   const code = await runCli({
     argv: ['sync-template', '--no-prompt'],
@@ -269,4 +268,93 @@ test('sync-template: API failure maps to a non-zero exit', async () => {
   });
   assert.equal(code, 3, 'auth errors map to exit 3');
   assert.match(errors(), /sync-template failed/);
+});
+
+// --------- bootstrap-project CLI wiring tests ---------
+
+function bootstrapWorkspace({ template = { id: 'tpl_hh', name: 'Human Handoff', teamId: 'team_grv' } } = {}) {
+  const created = { issues: [], relations: [] };
+  return {
+    created,
+    ws: {
+      describe: () => ({ connected: true }),
+      async getViewer() { return { viewer: { id: 'u', name: 'Ada' }, organization: { id: 'o', name: 'Riddim', urlKey: 'riddim' } }; },
+      async listTeams() { return [{ id: 'team_grv', key: 'GRV', name: 'Groove' }]; },
+      async listLabels() { return [{ id: 'lab_hh', name: 'human-handoff', teamId: 'team_grv' }]; },
+      async getTemplate() { return template; },
+      async getProject({ id }) {
+        if (id === 'prj_1') return { id: 'prj_1', name: 'Demo', slugId: 'demo', teamIds: ['team_grv'] };
+        return null;
+      },
+      async listProjectIssues() {
+        return [{ id: 'iss_a', identifier: 'GRV-10', title: 'Sib A', labels: [] }];
+      },
+      async listIssueRelations() { return []; },
+      async listWorkflowStates() { return [{ id: 'state_backlog', name: 'Backlog', type: 'backlog' }]; },
+      async createIssue(input) {
+        const issue = { id: 'iss_hh', identifier: 'GRV-99', title: input.title, url: 'https://linear.app/x/issue/GRV-99' };
+        created.issues.push({ input, issue });
+        return issue;
+      },
+      async createRelation(input) {
+        const rel = { id: `rel_${created.relations.length + 1}`, type: input.type, issueId: input.issueId, relatedIssueId: input.relatedIssueId };
+        created.relations.push({ input, rel });
+        return rel;
+      },
+    },
+  };
+}
+
+test('bootstrap-project fails fast when --project is missing', async () => {
+  const { stdout, stderr, errors } = captureStreams();
+  const code = await runCli({
+    argv: ['bootstrap-project', '--no-prompt'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => bootstrapWorkspace().ws,
+  });
+  assert.equal(code, 1);
+  assert.match(errors(), /--project <id-or-slug> is required/);
+});
+
+test('bootstrap-project without a token exits 2', async () => {
+  const { stdout, stderr } = captureStreams();
+  const code = await runCli({
+    argv: ['bootstrap-project', '--project', 'prj_1', '--no-prompt'],
+    env: {},
+    stdout, stderr,
+    workspaceFactory: () => bootstrapWorkspace().ws,
+  });
+  assert.equal(code, 2);
+});
+
+test('bootstrap-project --dry-run reports plan and performs no mutations', async () => {
+  const { stdout, stderr, output } = captureStreams();
+  const fake = bootstrapWorkspace();
+  const code = await runCli({
+    argv: ['bootstrap-project', '--project', 'prj_1', '--dry-run', '--no-prompt'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => fake.ws,
+  });
+  assert.equal(code, 0);
+  assert.equal(fake.created.issues.length, 0);
+  assert.equal(fake.created.relations.length, 0);
+  assert.match(output(), /dry-run/);
+});
+
+test('bootstrap-project (default apply) creates HH issue and a blocks relation', async () => {
+  const { stdout, stderr, output } = captureStreams();
+  const fake = bootstrapWorkspace();
+  const code = await runCli({
+    argv: ['bootstrap-project', '--project', 'prj_1', '--no-prompt'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => fake.ws,
+  });
+  assert.equal(code, 0);
+  assert.equal(fake.created.issues.length, 1);
+  assert.equal(fake.created.relations.length, 1);
+  assert.equal(fake.created.relations[0].input.type, 'blocks');
+  assert.match(output(), /2 mutation\(s\) performed/);
 });
