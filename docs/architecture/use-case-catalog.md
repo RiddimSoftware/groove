@@ -141,3 +141,14 @@ Ports: none — adapter-only enumeration over the transcript readers.
 Primary adapters: Claude/Codex transcript readers.
 Notes: adapter-only; it lives at the edge rather than the core because it reads the local transcript filesystem directly, so it is not subject to the core dependency rule.
 Current implementation: `packages/llm-cost-attribution/src/index.mjs` (`listKnownIssues`)
+
+### DefineHumanHandoffLinearPackageContract
+Actor: Workflow operator
+Goal: Expose the Linear-specific Human Handoff package boundary so downstream work can add real setup and template-sync behavior without reshaping the CLI or application ports.
+Inputs: setup command selection, optional Linear team selector, Human Handoff template body, injected Linear workspace / secret / reporter ports.
+Outputs: command contract metadata, no-op setup/sync/doctor/bootstrap results, mutation count, token-readiness signal, validated template body.
+Entities / values: SetupCommand, LinearTeamSelector, HumanHandoffTemplateBody.
+Ports: LinearWorkspace, ConsoleReporter, SecretReader.
+Primary adapters: CLI command parser, environment-backed SecretReader, stream ConsoleReporter, no-op LinearWorkspace adapter.
+Notes: foundation scaffold only. Core use-case modules import no process environment, child_process, direct fetch, or Linear API details; real GraphQL mutations belong in a future LinearWorkspace adapter.
+Current implementation: `packages/human-handoff-linear/src/use-cases/define-human-handoff-linear-package-contract.mjs`, `packages/human-handoff-linear/src/use-cases/*.mjs`
