@@ -24,23 +24,13 @@ npx linear-agent-hooks setup
 
 ### [`human-handoff-linear`](packages/human-handoff-linear)
 
-Linear-backed workflow primitives for the human-handoff pattern — one project-level Human Handoff issue that aggregates every step a human still has to do in an otherwise autonomous flow.
-
-Validate your Linear API key without touching any of your data:
-
-```bash
-LINEAR_API_KEY=lin_api_… npx human-handoff-linear doctor
-```
-
-Or provision the workspace-level `Human Handoff` issue template from the versioned, public-safe markdown body. Idempotent: creates the template the first time, updates it when the bundled body drifts, reports no-change when already in sync.
+Linear-backed workflow primitives for the human-handoff pattern: validate local
+API-key auth, install the team label, sync the workspace template, and
+bootstrap one project-level Human Handoff issue that aggregates human-only
+work. Start with a dry run before writing to Linear:
 
 ```bash
-LINEAR_API_KEY=lin_api_… npx human-handoff-linear sync-template
-```
-
-Ensure selected Linear teams have the `human-handoff` issue label:
-
-```bash
+npx human-handoff-linear setup --team GRV --dry-run
 npx human-handoff-linear setup --team GRV
 ```
 

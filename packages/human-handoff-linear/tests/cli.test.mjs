@@ -70,12 +70,20 @@ test('help output documents supported commands without requiring a Linear token'
   assert.match(result.stdout, /\bbootstrap-project\b/);
   assert.match(result.stdout, /setup ensures each selected team has a human-handoff issue label/);
   assert.match(result.stdout, /bootstrap-project creates the final Human Handoff issue/);
+  assert.match(result.stdout, /sync-template creates or updates the workspace-level "Human Handoff" issue/);
 });
 
-test('help output documents --no-prompt and the auth section', () => {
+test('help output documents auth, dry-run-first, and setup options referenced by README', () => {
   const result = runCliSpawn(['--help']);
+  assert.equal(result.status, 0);
   assert.match(result.stdout, /--no-prompt/);
+  assert.match(result.stdout, /--dry-run/);
+  assert.match(result.stdout, /--team <key>/);
+  assert.match(result.stdout, /--all-teams/);
+  assert.match(result.stdout, /--project <ref>/);
   assert.match(result.stdout, /LINEAR_API_KEY/);
+  assert.match(result.stdout, /LINEAR_API_TOKEN/);
+  assert.match(result.stdout, /No Linear mutations are performed by --dry-run on any command/);
 });
 
 test('unknown command fails explicitly without requiring a Linear token', () => {
