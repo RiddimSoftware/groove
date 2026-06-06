@@ -1,7 +1,7 @@
 export const HUMAN_HANDOFF_LINEAR_COMMANDS = Object.freeze([
   Object.freeze({
     name: 'setup',
-    summary: 'Validate the package contract and report the future Linear setup plan.',
+    summary: 'Ensure selected Linear teams have the human-handoff issue label.',
   }),
   Object.freeze({
     name: 'sync-template',
@@ -23,6 +23,6 @@ export function defineHumanHandoffLinearPackageContract() {
     commands: HUMAN_HANDOFF_LINEAR_COMMANDS,
     ports: Object.freeze(['LinearWorkspace', 'ConsoleReporter', 'SecretReader']),
     values: Object.freeze(['SetupCommand', 'LinearTeamSelector', 'HumanHandoffTemplateBody']),
-    mutationPolicy: 'scaffold-no-op',
+    mutationPolicy: 'setup-mutates-labels; other scaffold commands are no-op',
   });
 }

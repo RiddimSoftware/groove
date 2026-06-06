@@ -38,6 +38,12 @@ Or provision the workspace-level `Human Handoff` issue template from the version
 LINEAR_API_KEY=lin_api_… npx human-handoff-linear sync-template
 ```
 
+Ensure selected Linear teams have the `human-handoff` issue label:
+
+```bash
+npx human-handoff-linear setup --team GRV
+```
+
 ### [`llm-cost-attribution`](packages/llm-cost-attribution)
 
 Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no custom telemetry pipeline required.

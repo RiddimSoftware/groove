@@ -24,15 +24,28 @@ function captureStreams() {
 }
 
 function fakeWorkspace({ getViewer } = {}) {
+  const createdLabels = [];
   return {
+    createdLabels,
     describe: () => ({ connected: true }),
     getViewer: getViewer ?? (async () => ({
       viewer: { id: 'u', name: 'Ada', email: 'ada@example.com' },
       organization: { id: 'o', name: 'Riddim', urlKey: 'riddim' },
     })),
-    listTeams: async () => [],
-    listLabels: async () => [],
-    createLabel: async () => { throw new Error('mutating call in doctor'); },
+    listTeams: async () => [
+      { id: 'team-grv', key: 'GRV', name: 'Groove' },
+      { id: 'team-web', key: 'WEB', name: 'Web' },
+    ],
+    listLabels: async ({ teamId }) => {
+      if (teamId === 'team-grv') {
+        return [{ id: 'label-grv', name: 'Human-Handoff', color: '#f59e0b', teamId, description: null }];
+      }
+      return [];
+    },
+    createLabel: async (input) => {
+      createdLabels.push(input);
+      return { id: `label-${input.teamId}`, ...input };
+    },
     getTemplate: async () => null,
     createTemplate: async () => { throw new Error('mutating call in doctor'); },
     updateTemplate: async () => { throw new Error('mutating call in doctor'); },
@@ -43,7 +56,7 @@ function fakeWorkspace({ getViewer } = {}) {
   };
 }
 
-// --------- spawnSync black-box tests (existing scaffold behavior) ---------
+// --------- spawnSync black-box tests ---------
 
 test('help output documents supported commands without requiring a Linear token', () => {
   const result = runCliSpawn(['--help']);
@@ -55,7 +68,8 @@ test('help output documents supported commands without requiring a Linear token'
   assert.match(result.stdout, /\bsync-template\b/);
   assert.match(result.stdout, /\bdoctor\b/);
   assert.match(result.stdout, /\bbootstrap-project\b/);
-  assert.match(result.stdout, /No Linear mutations are performed/);
+  assert.match(result.stdout, /setup ensures each selected team has a human-handoff issue label/);
+  assert.match(result.stdout, /bootstrap-project validates routing and contracts only/);
 });
 
 test('help output documents --no-prompt and the auth section', () => {
@@ -133,15 +147,39 @@ test('doctor: missing token without --no-prompt and no TTY surfaces as missing_t
   assert.equal(code, 2);
 });
 
-test('setup still routes through the no-op workspace path and exits 0', async () => {
+test('setup --dry-run reports existing and missing team labels without mutating', async () => {
   const { stdout, stderr, output } = captureStreams();
+  const workspace = fakeWorkspace();
   const code = await runCli({
-    argv: ['setup'],
-    env: {},
+    argv: ['setup', '--team', 'GRV', '--team', 'WEB', '--dry-run'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
     stdout, stderr,
+    workspaceFactory: () => workspace,
   });
   assert.equal(code, 0);
-  assert.match(output(), /no mutations performed/);
+  assert.match(output(), /already present: GRV/);
+  assert.match(output(), /would create: WEB/);
+  assert.match(output(), /dry run complete: 1 would create, 1 already present; no Linear changes made/);
+  assert.deepEqual(workspace.createdLabels, []);
+});
+
+test('setup creates missing labels and passes metadata overrides', async () => {
+  const { stdout, stderr, output } = captureStreams();
+  const workspace = fakeWorkspace();
+  const code = await runCli({
+    argv: ['setup', '--team', 'WEB', '--color', '#d97706', '--description', 'Tracks human-only project blockers.'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => workspace,
+  });
+  assert.equal(code, 0);
+  assert.match(output(), /created: WEB/);
+  assert.deepEqual(workspace.createdLabels, [{
+    teamId: 'team-web',
+    name: 'human-handoff',
+    color: '#d97706',
+    description: 'Tracks human-only project blockers.',
+  }]);
 });
 
 // --------- sync-template CLI wiring tests ---------
