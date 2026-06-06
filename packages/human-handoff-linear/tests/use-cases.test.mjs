@@ -7,7 +7,6 @@ import {
   createDoctorUseCase,
   createHumanHandoffTemplateBody,
   createSetupUseCase,
-  createSyncTemplateUseCase,
   defineHumanHandoffLinearPackageContract,
 } from '../src/index.mjs';
 import { LinearAuthError, LinearPermissionError, LinearRateLimitError } from '../src/errors.mjs';
@@ -232,16 +231,6 @@ test('checked-in template satisfies the Human Handoff body value contract', asyn
   assert.match(template.body, /## Verification checklist/);
 });
 
-test('sync-template use case validates the injected template without writing to Linear', async () => {
-  const body = await readFile(resolve(__dirname, '..', 'templates', 'human-handoff-issue-body.md'), 'utf8');
-  const { reporter } = memoryReporter();
-  const result = await createSyncTemplateUseCase({
-    reporter,
-    templateBody: body,
-    workspace: {},
-  })();
-
-  assert.equal(result.command.name, 'sync-template');
-  assert.equal(result.mutationsPerformed, 0);
-  assert.match(result.template.body, /hh-prepared/);
-});
+// sync-template use-case behavior is covered in tests/sync-template.test.mjs.
+// The scaffold-style test that previously lived here has been replaced by the
+// full create / update / no-change / dry-run / API-failure suite over there.

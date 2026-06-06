@@ -65,7 +65,7 @@
  * @property {(input?: { teamId?: string }) => Promise<LinearLabel[]>=} listLabels
  * @property {(input: { teamId: string, name: string, color?: string, description?: string }) => Promise<LinearLabel>=} createLabel
  * @property {(input: { id?: string, teamId?: string, name?: string }) => Promise<LinearTemplate | null>=} getTemplate
- * @property {(input: { teamId: string, name: string, description?: string, type?: string }) => Promise<LinearTemplate>=} createTemplate
+ * @property {(input: { teamId?: string, name: string, description?: string, type?: string }) => Promise<LinearTemplate>=} createTemplate
  * @property {(input: { id: string, name?: string, description?: string }) => Promise<LinearTemplate>=} updateTemplate
  * @property {(input: { teamId: string, title: string, description?: string, labelIds?: string[], templateId?: string, projectId?: string }) => Promise<LinearIssue>=} createIssue
  * @property {(input: { issueId: string, relatedIssueId: string, type?: string }) => Promise<LinearRelation>=} createRelation

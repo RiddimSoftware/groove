@@ -143,3 +143,92 @@ test('setup still routes through the no-op workspace path and exits 0', async ()
   assert.equal(code, 0);
   assert.match(output(), /no mutations performed/);
 });
+
+// --------- sync-template CLI wiring tests ---------
+
+function templateWorkspace({ existing = null, createId = 'tpl_new', updateId = 'tpl_upd' } = {}) {
+  return {
+    describe: () => ({ connected: true }),
+    getViewer: async () => ({ viewer: { id: 'u', name: 'Ada' }, organization: { id: 'o', name: 'Riddim', urlKey: 'riddim' } }),
+    listTeams: async () => [],
+    listLabels: async () => [],
+    createLabel: async () => { throw new Error('sync-template should not create labels'); },
+    getTemplate: async () => existing,
+    createTemplate: async (input) => ({ id: createId, name: input.name, description: input.description, type: input.type ?? 'issue', teamId: null }),
+    updateTemplate: async (input) => ({ id: input.id ?? updateId, name: 'Human Handoff', description: input.description, type: 'issue', teamId: null }),
+    createIssue: async () => { throw new Error('sync-template should not create issues'); },
+    createRelation: async () => { throw new Error('sync-template should not create relations'); },
+    syncHumanHandoffTemplate: async () => { throw new Error('not used by sync-template'); },
+    bootstrapHumanHandoffProject: async () => { throw new Error('not used by sync-template'); },
+  };
+}
+
+test('sync-template: missing LINEAR_API_KEY exits with missing-token (exit 2)', async () => {
+  const { stdout, stderr } = captureStreams();
+  const code = await runCli({
+    argv: ['sync-template', '--no-prompt'],
+    env: {},
+    stdout, stderr,
+  });
+  assert.equal(code, 2);
+});
+
+test('sync-template: creates the template, exits 0, reports the action', async () => {
+  const { stdout, stderr, output } = captureStreams();
+  const code = await runCli({
+    argv: ['sync-template', '--no-prompt'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => templateWorkspace({ existing: null, createId: 'tpl_brand' }),
+  });
+  assert.equal(code, 0);
+  assert.match(output(), /sync-template complete - create performed/);
+  assert.match(output(), /tpl_brand/);
+});
+
+test('sync-template: --dry-run reports the planned action without performing mutations', async () => {
+  const { stdout, stderr, output } = captureStreams();
+  const code = await runCli({
+    argv: ['sync-template', '--no-prompt', '--dry-run'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => templateWorkspace({ existing: null }),
+  });
+  assert.equal(code, 0);
+  assert.match(output(), /sync-template complete - create planned/);
+});
+
+test('sync-template: no-change when existing description already matches', async () => {
+  const body = await (await import('node:fs/promises')).readFile(
+    new URL('../templates/human-handoff-issue-body.md', import.meta.url),
+    'utf8',
+  );
+  const { stdout, stderr, output } = captureStreams();
+  const code = await runCli({
+    argv: ['sync-template', '--no-prompt'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => templateWorkspace({
+      existing: { id: 'tpl_in_sync', name: 'Human Handoff', description: body.trimEnd(), type: 'issue', teamId: null },
+    }),
+  });
+  assert.equal(code, 0);
+  assert.match(output(), /sync-template complete - no change/);
+  assert.match(output(), /tpl_in_sync/);
+});
+
+test('sync-template: API failure maps to a non-zero exit', async () => {
+  const { LinearAuthError } = await import('../src/errors.mjs');
+  const { stdout, stderr, errors } = captureStreams();
+  const code = await runCli({
+    argv: ['sync-template', '--no-prompt'],
+    env: { LINEAR_API_KEY: 'lin_fake' },
+    stdout, stderr,
+    workspaceFactory: () => ({
+      ...templateWorkspace(),
+      getTemplate: async () => { throw new LinearAuthError('rejected'); },
+    }),
+  });
+  assert.equal(code, 3, 'auth errors map to exit 3');
+  assert.match(errors(), /sync-template failed/);
+});

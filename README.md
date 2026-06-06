@@ -32,6 +32,12 @@ Validate your Linear API key without touching any of your data:
 LINEAR_API_KEY=lin_api_… npx human-handoff-linear doctor
 ```
 
+Or provision the workspace-level `Human Handoff` issue template from the versioned, public-safe markdown body. Idempotent: creates the template the first time, updates it when the bundled body drifts, reports no-change when already in sync.
+
+```bash
+LINEAR_API_KEY=lin_api_… npx human-handoff-linear sync-template
+```
+
 ### [`llm-cost-attribution`](packages/llm-cost-attribution)
 
 Per-issue token, turn, and quota analytics for Claude Code and Codex CLI sessions. Reads the CLIs' own session JSONLs — no custom telemetry pipeline required.

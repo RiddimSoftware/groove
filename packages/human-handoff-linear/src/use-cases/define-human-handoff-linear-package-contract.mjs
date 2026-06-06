@@ -5,7 +5,7 @@ export const HUMAN_HANDOFF_LINEAR_COMMANDS = Object.freeze([
   }),
   Object.freeze({
     name: 'sync-template',
-    summary: 'Report the checked-in Human Handoff template that future work will sync.',
+    summary: 'Create or update the Human Handoff workspace template idempotently (--dry-run plans without writing).',
   }),
   Object.freeze({
     name: 'doctor',

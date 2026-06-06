@@ -262,6 +262,50 @@ test('getTemplate without id/teamId+name throws TypeError', async () => {
   await assert.rejects(ws.getTemplate({ teamId: 't1' }), TypeError);
 });
 
+test('getTemplate by name (no teamId) finds the workspace-level template', async () => {
+  const fetch = recordingFetch(() => jsonResponse({
+    data: { templates: [
+      { id: 'tpl_a', name: 'Bug Report', description: '', type: 'issue', teamId: 't1' },
+      { id: 'tpl_b', name: 'Human Handoff', description: 'body', type: 'issue', teamId: null },
+      { id: 'tpl_c', name: 'Human Handoff', description: 'team body', type: 'issue', teamId: 't1' },
+    ] },
+  }));
+  const ws = createLinearGraphqlWorkspace({ apiKey: FAKE_KEY, fetch });
+  const tpl = await ws.getTemplate({ name: 'Human Handoff' });
+  const body = JSON.parse(fetch.calls[0].init.body);
+  assert.match(body.query, /templates/);
+  assert.equal(body.variables ?? undefined, undefined);
+  assert.deepEqual(tpl, { id: 'tpl_b', name: 'Human Handoff', description: 'body', type: 'issue', teamId: null });
+});
+
+test('getTemplate by name returns null when no workspace template matches', async () => {
+  const fetch = async () => jsonResponse({
+    data: { templates: [
+      { id: 'tpl_c', name: 'Human Handoff', description: '', type: 'issue', teamId: 't1' },
+    ] },
+  });
+  const ws = createLinearGraphqlWorkspace({ apiKey: FAKE_KEY, fetch });
+  assert.equal(await ws.getTemplate({ name: 'Human Handoff' }), null);
+});
+
+test('createTemplate without teamId creates a workspace-level template', async () => {
+  const fetch = recordingFetch(() => jsonResponse({
+    data: { templateCreate: { success: true, template: { id: 'tpl_w', name: 'Human Handoff', description: 'd', type: 'issue', teamId: null } } },
+  }));
+  const ws = createLinearGraphqlWorkspace({ apiKey: FAKE_KEY, fetch });
+  const tpl = await ws.createTemplate({ name: 'Human Handoff', description: 'd' });
+  const body = JSON.parse(fetch.calls[0].init.body);
+  assert.equal(body.variables.input.name, 'Human Handoff');
+  assert.equal(body.variables.input.teamId, undefined, 'teamId is omitted for workspace-level');
+  assert.equal(tpl.teamId, null);
+});
+
+test('createTemplate requires { name }', async () => {
+  const ws = createLinearGraphqlWorkspace({ apiKey: FAKE_KEY, fetch: async () => jsonResponse({}) });
+  await assert.rejects(ws.createTemplate({}), TypeError);
+  await assert.rejects(ws.createTemplate({ teamId: 't1' }), TypeError);
+});
+
 test('createTemplate posts input and returns normalized template', async () => {
   const fetch = recordingFetch(() => jsonResponse({
     data: { templateCreate: { success: true, template: { id: 'tpl_new', name: 'Human Handoff', description: 'd', type: 'issue', teamId: 't1' } } },

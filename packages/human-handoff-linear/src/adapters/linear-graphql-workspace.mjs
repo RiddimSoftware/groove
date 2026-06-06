@@ -179,25 +179,39 @@ export function createLinearGraphqlWorkspace({
         );
         return data?.template ? normalizeTemplate(data.template) : null;
       }
-      if (!teamId || !name) {
-        throw new TypeError('getTemplate requires { id } or { teamId, name }.');
+      if (!name) {
+        throw new TypeError('getTemplate requires { id } or { name } (optionally scoped with { teamId }).');
       }
+      if (teamId) {
+        const data = await graphql(
+          `query TeamTemplates($teamId: String!) {
+            team(id: $teamId) {
+              templates { nodes { id name description type teamId } }
+            }
+          }`,
+          { teamId },
+        );
+        const nodes = data?.team?.templates?.nodes ?? [];
+        const match = nodes.find((n) => n.name === name);
+        return match ? normalizeTemplate(match) : null;
+      }
+      // Workspace-level: list every template the viewer can see and filter by
+      // name + type === 'issue', dropping any team-scoped templates so a
+      // same-named team template does not shadow a missing workspace one.
       const data = await graphql(
-        `query TeamTemplates($teamId: String!) {
-          team(id: $teamId) {
-            templates { nodes { id name description type teamId } }
-          }
+        `query WorkspaceTemplates {
+          templates { id name description type teamId }
         }`,
-        { teamId },
       );
-      const nodes = data?.team?.templates?.nodes ?? [];
-      const match = nodes.find((n) => n.name === name);
+      const nodes = Array.isArray(data?.templates) ? data.templates : [];
+      const match = nodes.find((n) => n.name === name && n.type === 'issue' && !n.teamId);
       return match ? normalizeTemplate(match) : null;
     },
 
     async createTemplate({ teamId, name, description, type = 'issue' } = {}) {
-      if (!teamId) throw new TypeError('createTemplate requires { teamId }.');
       if (!name) throw new TypeError('createTemplate requires { name }.');
+      const input = { name, description, type };
+      if (teamId) input.teamId = teamId;
       const data = await graphql(
         `mutation CreateTemplate($input: TemplateCreateInput!) {
           templateCreate(input: $input) {
@@ -205,7 +219,7 @@ export function createLinearGraphqlWorkspace({
             template { id name description type teamId }
           }
         }`,
-        { input: { teamId, name, description, type } },
+        { input },
       );
       const result = data?.templateCreate;
       if (!result?.success || !result.template) {
