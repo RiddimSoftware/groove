@@ -1,78 +1,145 @@
 # human-handoff-linear
 
-Linear workflow primitives for installing and maintaining the Human Handoff
-issue template and team labels used by autonomous project workflows.
+`human-handoff-linear` is a local CLI for installing and maintaining the
+Human Handoff Linear primitive in a workspace. It gives autonomous project
+workflows one predictable place to track human-only blockers while the rest of
+the project remains agent-actionable.
 
-Today the package ships four real Linear commands:
+The package currently manages four pieces of Linear setup:
 
-- `doctor` — read-only auth and viewer/organization check.
-- `setup` — ensure selected Linear teams have the `human-handoff` issue label.
-- `sync-template` — provision the workspace-level `Human Handoff` issue
-  template idempotently: create it if missing, update its body when the
-  bundled markdown drifts, report no-change when already in sync.
-- `bootstrap-project` — create (or reuse) the final Human Handoff issue for
-  an existing Linear Project and wire `blocks` relations from every sibling
-  implementation issue. Idempotent on every re-run.
+- `doctor` validates the API key and workspace without mutating Linear.
+- `sync-template` creates or updates the workspace-level `Human Handoff` issue
+  template.
+- `setup` ensures selected teams have the `human-handoff` issue label.
+- `bootstrap-project` creates or reuses the final Human Handoff issue for a
+  project and wires `blocks` relations from every sibling implementation issue.
 
-## Requirements
+## Install
 
-- Node.js 20+
-- A Linear personal API key. Create one at
-  <https://linear.app/settings/api>.
-
-## Auth
-
-The CLI reads the API key from `LINEAR_API_KEY` or `LINEAR_API_TOKEN`.
-
-```bash
-export LINEAR_API_KEY=lin_api_...
-```
-
-The `doctor`, `sync-template`, and `bootstrap-project` commands can also
-prompt for the key in an interactive terminal. The key is never logged,
-written to disk, or echoed back.
-
-## CLI
+Run directly with `npx`:
 
 ```bash
 npx human-handoff-linear --help
 ```
 
-Subcommands:
+Or install it as a CLI dependency:
 
-- `setup` - ensure selected Linear teams have the `human-handoff` issue label.
-- `doctor` - validate the Linear API token by fetching the current viewer and
-  workspace. Read-only: never creates or updates templates, labels, issues, or
-  relations.
-- `sync-template` — create or update the workspace-level `Human Handoff` issue
-  template idempotently. Pass `--dry-run` to plan without writing.
-- `bootstrap-project` — create or reuse the final Human Handoff issue for a
-  Linear Project and wire `blocks` relations from every sibling implementation
-  issue. Pass `--dry-run` to plan without writing.
+```bash
+npm install --save-dev human-handoff-linear
+npx human-handoff-linear --help
+```
+
+When working from this repository, the workspace package can be run with:
+
+```bash
+npm --workspace human-handoff-linear test
+node packages/human-handoff-linear/bin/human-handoff-linear.mjs --help
+```
+
+## Auth
+
+The CLI uses a Linear personal API key for local setup. Create one in Linear at
+`https://linear.app/settings/api`, then export it before running commands:
+
+```bash
+export LINEAR_API_KEY=lin_api_...
+```
+
+`setup` also accepts `LINEAR_API_TOKEN`. `doctor`, `sync-template`, and
+`bootstrap-project` can prompt for the key in an interactive terminal. Pass
+`--no-prompt` in CI or scripts to fail fast instead of prompting.
+
+This is intentionally not a hosted Linear app yet. Today there is no OAuth
+install flow, webhook endpoint, bot actor, or Linear Integration Directory
+listing. The CLI runs locally under the API key you provide and can only access
+what that key can access. A future hosted integration could replace local API
+keys with OAuth and workspace installation, but that is outside this package's
+current behavior.
+
+## Minimal Setup
+
+Use dry runs first so the intended Linear writes are visible before they happen:
+
+```bash
+# 1. Confirm the token can read the workspace. This never writes to Linear.
+npx human-handoff-linear doctor --no-prompt
+
+# 2. Plan label installation for the teams that will use Human Handoff.
+npx human-handoff-linear setup --team GRV --dry-run
+
+# 3. Apply label installation when the plan is correct.
+npx human-handoff-linear setup --team GRV
+
+# 4. Plan the workspace template sync.
+npx human-handoff-linear sync-template --dry-run --no-prompt
+
+# 5. Apply the workspace template sync.
+npx human-handoff-linear sync-template --no-prompt
+
+# 6. Plan the project handoff issue and blocks relations.
+npx human-handoff-linear bootstrap-project --project <id-or-slug> --dry-run --no-prompt
+
+# 7. Apply project bootstrap when the plan is correct.
+npx human-handoff-linear bootstrap-project --project <id-or-slug> --no-prompt
+```
+
+For a multi-team workspace, pass `--team` more than once or comma-separate team
+keys:
+
+```bash
+npx human-handoff-linear setup --team GRV --team WEB --dry-run
+npx human-handoff-linear setup --team GRV,WEB
+```
+
+Use `--all-teams` only when the API key should install the label on every team
+it can see.
+
+## Command Reference
+
+### `doctor`
+
+```bash
+npx human-handoff-linear doctor --no-prompt
+```
+
+`doctor` validates auth by fetching the current Linear viewer and organization.
+It is read-only and never creates or updates templates, labels, issues, or
+relations.
+
+Successful output includes the authenticated user and workspace:
+
+```text
+human-handoff-linear doctor - validating Linear auth (read-only).
+Linear token: present.
+Authenticated as Ada Lovelace in workspace Riddim (riddim).
+human-handoff-linear doctor complete - no mutations performed
+```
+
+Stable failure exit codes:
+
+| Condition | Stderr prefix | Exit |
+| --- | --- | --- |
+| Missing token with `--no-prompt` or non-TTY stdin | `LINEAR_API_KEY is not set` | 2 |
+| HTTP 401 or GraphQL `AUTHENTICATION_ERROR` | `[auth]` | 3 |
+| HTTP 403 or GraphQL `FORBIDDEN` | `[permission]` | 4 |
+| HTTP 429 or GraphQL `RATELIMITED` | `[rate_limit]` | 5 |
+| Network or transport failure | `[network]` | 6 |
+| Other GraphQL or HTTP error | `[api]` | 7 |
+| Other unknown failure | no stable prefix | 1 |
 
 ### `setup`
 
 ```bash
-npx human-handoff-linear setup --team GRV --team WEB
+npx human-handoff-linear setup --team GRV --dry-run
+npx human-handoff-linear setup --team GRV
 ```
 
-The command accepts team keys or Linear team UUIDs. Existing labels are detected
-case-insensitively, so `Human-Handoff` satisfies the requirement and will not be
-duplicated.
+`setup` ensures each selected team has an issue label named `human-handoff`.
+Team refs can be Linear team keys or UUIDs. Existing labels are matched
+case-insensitively, so `Human-Handoff` satisfies the requirement and will not
+be duplicated.
 
-To preview changes:
-
-```bash
-npx human-handoff-linear setup --team GRV,WEB --dry-run
-```
-
-To ensure every Linear team visible to the API key:
-
-```bash
-npx human-handoff-linear setup --all-teams
-```
-
-Default label spec:
+Default label metadata:
 
 | Field | Default |
 | --- | --- |
@@ -80,7 +147,7 @@ Default label spec:
 | Color | `#f59e0b` |
 | Description | `Marks the project issue where human-only blockers are tracked.` |
 
-Override the defaults when a workspace needs different label metadata:
+Override the label fields when a workspace needs different metadata:
 
 ```bash
 npx human-handoff-linear setup --team GRV \
@@ -90,84 +157,58 @@ npx human-handoff-linear setup --team GRV \
 
 ### `sync-template`
 
-```text
-$ human-handoff-linear sync-template
-human-handoff-linear sync-template - syncing "Human Handoff" workspace template
-Created workspace template "Human Handoff" (id: tpl_…)
-human-handoff-linear sync-template complete - create performed (id: tpl_…)
+```bash
+npx human-handoff-linear sync-template --dry-run --no-prompt
+npx human-handoff-linear sync-template --no-prompt
 ```
 
-Run it once to install the template; run it again after editing
-`templates/human-handoff-issue-body.md` to push the new body. When the body
-already matches what is in Linear, `sync-template` reports `no change` and
-performs no write. It is safe to run from CI on every push.
+`sync-template` installs the workspace-level `Human Handoff` issue template
+from `templates/human-handoff-issue-body.md`. It is idempotent:
+
+- Creates the template when it is missing.
+- Updates the template body when the bundled markdown has changed.
+- Reports `no change` when Linear already matches the bundled template.
+
+Example dry-run output:
 
 ```text
-$ human-handoff-linear sync-template --dry-run   # plan-only, no writes
 human-handoff-linear sync-template - syncing "Human Handoff" workspace template
-[dry-run] Would update workspace template "Human Handoff" (id: tpl_…)
+[dry-run] Would update workspace template "Human Handoff" (id: tpl_...)
 human-handoff-linear sync-template complete - update planned
 ```
 
-The same Linear error codes that `doctor` returns also apply to
-`sync-template` (auth → 3, permission → 4, rate-limit → 5, network → 6, other
-API errors → 7).
-
-### `doctor`
-
-```text
-$ human-handoff-linear doctor
-human-handoff-linear doctor - validating Linear auth (read-only).
-Linear token: present.
-Authenticated as Ada Lovelace in workspace Riddim (riddim).
-human-handoff-linear doctor complete - no mutations performed
-```
-
-Failure cases map to stable exit codes for scripting:
-
-| Condition | Stderr prefix | Exit |
-|---|---|---|
-| `LINEAR_API_KEY` unset and `--no-prompt` (or non-TTY) | `LINEAR_API_KEY is not set` | 2 |
-| HTTP 401 / GraphQL `AUTHENTICATION_ERROR` | `[auth]` | 3 |
-| HTTP 403 / GraphQL `FORBIDDEN` | `[permission]` | 4 |
-| HTTP 429 / GraphQL `RATELIMITED` | `[rate_limit]` | 5 |
-| Network/transport failure | `[network]` | 6 |
-| Other GraphQL or HTTP error | `[api]` | 7 |
-| Other / unknown | (no prefix) | 1 |
-
 ### `bootstrap-project`
 
-Bootstrap the final Human Handoff issue for an existing Linear Project, and
-wire `blocks` relations from every sibling implementation issue so the HH
-issue stays blocked until the rest of the project is complete.
-
 ```bash
-# Apply (default): create the HH issue if missing and the missing blocks
-# relations.
-human-handoff-linear bootstrap-project --project <id-or-slug>
-
-# Dry-run: report the HH create/reuse decision and every planned blocks
-# relation without mutating Linear.
-human-handoff-linear bootstrap-project --project <id-or-slug> --dry-run
+npx human-handoff-linear bootstrap-project --project <id-or-slug> --dry-run --no-prompt
+npx human-handoff-linear bootstrap-project --project <id-or-slug> --no-prompt
 ```
 
-Behavior:
+`bootstrap-project` prepares one existing Linear Project for the Human Handoff
+pattern:
 
-- Looks up the Linear Project by id or slug and reads its issues.
-- Resolves the target team from the project (pass `--team <key>` when the
-  project spans multiple teams).
-- Reuses any existing issue in the project that carries the `human-handoff`
-  label; otherwise creates one titled `Human handoff for <Project name>`,
-  applies the `human-handoff` label, attaches the `Human Handoff` template,
-  starts it in the team's `Backlog` (or `Todo`) state, and leaves the estimate
-  unset.
-- For every non-HH sibling issue in the project, creates a `blocks` relation
-  (sibling → HH) — skipping any relation that already exists. Re-running the
-  command therefore never duplicates issues or relations.
+- Looks up the project by id or slug and reads its issues.
+- Resolves the target team from the project. Pass `--team <key>` when the
+  project spans multiple teams.
+- Reuses any existing issue in the project with the `human-handoff` label.
+- Otherwise creates `Human handoff for <Project name>`, applies the
+  `human-handoff` label, attaches the `Human Handoff` template, starts it in
+  the team's `Backlog` or `Todo` state, and leaves the estimate unset.
+- Creates missing `blocks` relations from every non-handoff sibling issue to
+  the Human Handoff issue.
 
-Fails closed when the project, the `human-handoff` label, or the `Human
-Handoff` template is missing. Install those primitives via `setup` and
-`sync-template` before running `bootstrap-project`.
+Run `setup` and `sync-template` first. `bootstrap-project` fails closed when
+the project, label, or template is missing rather than creating partial setup.
+
+## Help
+
+```bash
+npx human-handoff-linear --help
+```
+
+The help output lists every command, common options, auth behavior, and mutation
+policy. The CLI test suite includes smoke checks for this help text so command
+names and documented options do not drift silently.
 
 ## Application API
 
@@ -188,11 +229,11 @@ const workspace = createLinearGraphqlWorkspace({ apiKey: process.env.LINEAR_API_
 const result = await ensureHumanHandoffLabels({
   workspace,
   teamRefs: ['GRV'],
+  dryRun: true,
 });
 
 const reporter = { info: console.log, error: console.error };
 
-// Read-only auth check
 const doctor = createDoctorUseCase({
   reporter,
   secretReader: { read: (name) => process.env[name] },
@@ -201,39 +242,31 @@ const doctor = createDoctorUseCase({
 const auth = await doctor();
 if (!auth.ok) process.exit(1);
 
-// Idempotent template sync
 const templateBody = await readFile('./templates/human-handoff-issue-body.md', 'utf8');
-const sync = createSyncTemplateUseCase({ reporter, templateBody, workspace });
-const syncResult = await sync({ dryRun: false });
-// → { action: 'create' | 'update' | 'no-change', templateId, mutationsPerformed, ... }
 
-// Idempotent project HH-issue bootstrap
+const sync = createSyncTemplateUseCase({ reporter, templateBody, workspace });
+const syncResult = await sync({ dryRun: true });
+// { action: 'create' | 'update' | 'no-change', templateId, mutationsPerformed, ... }
+
 const bootstrap = createBootstrapProjectUseCase({ reporter, workspace, templateBody });
-const bootstrapResult = await bootstrap({ project: 'prj_or_slug', dryRun: false });
-// → { humanHandoff: { decision, issue, spec }, relations: { created, skipped, planned }, ... }
+const bootstrapResult = await bootstrap({ project: 'prj_or_slug', dryRun: true });
+// { humanHandoff, relations, mutationsPerformed, dryRun, ... }
 ```
 
 Ports are plain objects:
 
-- `ConsoleReporter` - receives `info`, `error`, and optional `verbose` messages.
-- `SecretReader` - resolves secrets such as `LINEAR_API_KEY`.
-- `LinearWorkspace` - adapter boundary for Linear workspace operations.
-
-The full LinearWorkspace surface (`getViewer`, `listTeams`, `listLabels`,
-`createLabel`, `getTemplate`, `createTemplate`, `updateTemplate`,
-`createIssue`, `createRelation`, `getProject`, `listProjectIssues`,
-`listIssueRelations`, `listWorkflowStates`) is implemented by
-`createLinearGraphqlWorkspace`. The mutating commands compose these methods;
-they do not implement their own GraphQL.
+- `ConsoleReporter` receives `info`, `error`, and optional `verbose` messages.
+- `SecretReader` resolves secrets such as `LINEAR_API_KEY`.
+- `LinearWorkspace` is the adapter boundary for Linear workspace operations.
 
 Core use-case modules do not read environment variables, call `fetch`, or exit
-the process. Those responsibilities stay in CLI/adapter code (enforced by
-`tests/boundary.test.mjs`).
+the process. Those responsibilities stay in CLI and adapter code, enforced by
+`tests/boundary.test.mjs`.
 
 ## Template
 
-The public template lives at
-`templates/human-handoff-issue-body.md`. It preserves the Human Handoff setup
-contract in tracker-safe wording: one project-level handoff issue, read-only
-prep on that issue, two terminal writes, agent-actionable vs. human-only
-checkbox classes, and append-only blocker/verification sections.
+The bundled template lives at `templates/human-handoff-issue-body.md`. It
+preserves the Human Handoff setup contract in tracker-safe wording: one
+project-level handoff issue, read-only preparation, two terminal writes,
+agent-actionable versus human-only checkbox classes, and append-only blocker
+and verification sections.

@@ -17,6 +17,14 @@
     "docs/",
     "README.md"
   ],
+  "keywords": [
+    "linear",
+    "human-handoff",
+    "workflow",
+    "agentic",
+    "autonomous-developer",
+    "symphony"
+  ],
   "engines": {
     "node": ">=20"
   },
