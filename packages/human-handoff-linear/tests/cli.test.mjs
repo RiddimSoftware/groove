@@ -69,7 +69,7 @@ test('help output documents supported commands without requiring a Linear token'
   assert.match(result.stdout, /\bdoctor\b/);
   assert.match(result.stdout, /\bbootstrap-project\b/);
   assert.match(result.stdout, /setup ensures each selected team has a human-handoff issue label/);
-  assert.match(result.stdout, /bootstrap-project validates routing and contracts only/);
+  assert.match(result.stdout, /bootstrap-project creates the final Human Handoff issue/);
 });
 
 test('help output documents --no-prompt and the auth section', () => {
