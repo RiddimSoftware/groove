@@ -151,7 +151,7 @@ export function createLinearGraphqlWorkspace({
         const data = await graphql(
           `query Labels($teamId: ID, $first: Int!, $after: String) {
             issueLabels(first: $first, after: $after, filter: { team: { id: { eq: $teamId } } }) {
-              nodes { id name color teamId description }
+              nodes { id name color team { id } description }
               pageInfo { hasNextPage endCursor }
             }
           }`,
@@ -162,7 +162,7 @@ export function createLinearGraphqlWorkspace({
           id: l.id,
           name: l.name,
           color: l.color,
-          teamId: l.teamId,
+          teamId: l.team?.id ?? null,
           description: l.description ?? null,
         })) ?? []));
         if (page?.pageInfo?.hasNextPage !== true) break;
@@ -178,7 +178,7 @@ export function createLinearGraphqlWorkspace({
         `mutation CreateLabel($input: IssueLabelCreateInput!) {
           issueLabelCreate(input: $input) {
             success
-            issueLabel { id name color teamId description }
+            issueLabel { id name color team { id } description }
           }
         }`,
         { input: { teamId, name, color, description } },
@@ -191,7 +191,7 @@ export function createLinearGraphqlWorkspace({
         id: result.issueLabel.id,
         name: result.issueLabel.name,
         color: result.issueLabel.color,
-        teamId: result.issueLabel.teamId,
+        teamId: result.issueLabel.team?.id ?? null,
         description: result.issueLabel.description ?? null,
       };
     },
@@ -200,7 +200,7 @@ export function createLinearGraphqlWorkspace({
       if (id) {
         const data = await graphql(
           `query Template($id: String!) {
-            template(id: $id) { id name description type teamId }
+            template(id: $id) { id name description type team { id } }
           }`,
           { id },
         );
@@ -213,7 +213,7 @@ export function createLinearGraphqlWorkspace({
         const data = await graphql(
           `query TeamTemplates($teamId: String!) {
             team(id: $teamId) {
-              templates { nodes { id name description type teamId } }
+              templates { nodes { id name description type team { id } } }
             }
           }`,
           { teamId },
@@ -227,11 +227,11 @@ export function createLinearGraphqlWorkspace({
       // same-named team template does not shadow a missing workspace one.
       const data = await graphql(
         `query WorkspaceTemplates {
-          templates { id name description type teamId }
+          templates { id name description type team { id } }
         }`,
       );
       const nodes = Array.isArray(data?.templates) ? data.templates : [];
-      const match = nodes.find((n) => n.name === name && n.type === 'issue' && !n.teamId);
+      const match = nodes.find((n) => n.name === name && n.type === 'issue' && !n.team?.id);
       return match ? normalizeTemplate(match) : null;
     },
 
@@ -243,7 +243,7 @@ export function createLinearGraphqlWorkspace({
         `mutation CreateTemplate($input: TemplateCreateInput!) {
           templateCreate(input: $input) {
             success
-            template { id name description type teamId }
+            template { id name description type team { id } }
           }
         }`,
         { input },
@@ -264,7 +264,7 @@ export function createLinearGraphqlWorkspace({
         `mutation UpdateTemplate($id: String!, $input: TemplateUpdateInput!) {
           templateUpdate(id: $id, input: $input) {
             success
-            template { id name description type teamId }
+            template { id name description type team { id } }
           }
         }`,
         { id, input },
@@ -453,7 +453,7 @@ function normalizeTemplate(t) {
     name: t.name,
     description: t.description ?? null,
     type: t.type,
-    teamId: t.teamId,
+    teamId: t.team?.id ?? null,
   };
 }
 
