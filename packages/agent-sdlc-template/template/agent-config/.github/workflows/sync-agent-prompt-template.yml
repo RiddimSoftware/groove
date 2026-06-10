@@ -1,0 +1,30 @@
+name: Sync Agent-Prompt Linear Template
+
+# Runs whenever the canonical agent-prompt template file changes on main.
+# Converts the markdown to Linear's TipTap rich-text format and calls
+# templateUpdate via the GraphQL API. The GHA run log is the audit trail.
+#
+# Set LINEAR_AGENT_PROMPT_TEMPLATE_ID as a repository variable (Vars) or in the
+# workflow environment prior to enabling this job.
+on:
+  push:
+    branches: [main]
+    paths:
+      - context/templates/agent-prompt-issue-body.md
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync to Linear
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync template to Linear
+        run: python3 scripts/sync_agent_prompt_template.py
+        env:
+          AWS_PROFILE: your-aws-profile
+          LINEAR_AGENT_PROMPT_TEMPLATE_ID: ${{ vars.LINEAR_AGENT_PROMPT_TEMPLATE_ID }}

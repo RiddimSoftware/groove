@@ -1,0 +1,25 @@
+{
+  "name": "agent-sdlc-template",
+  "version": "0.1.0",
+  "description": "A template containing the RiddimSoftware agentic SDLC configurations, including Backlog Team and Architecture verification scripts.",
+  "type": "module",
+  "files": [
+    "template/",
+    "README.md"
+  ],
+  "keywords": [
+    "agentic",
+    "autonomous-developer",
+    "sdlc",
+    "template"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RiddimSoftware/groove.git",
+    "directory": "packages/agent-sdlc-template"
+  }
+}

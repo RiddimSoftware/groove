@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR"
+  short_description: "Fix PR comments and conflicts"
+  default_prompt: "Use $pr on <repo> PR <number-or-url> to resolve review comments and merge conflicts."

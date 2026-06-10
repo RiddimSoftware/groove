@@ -1,0 +1,8 @@
+team_key: S2S
+repo_name: s2s
+repository_path: /YOUR/WORKSPACE/DIR/s2s
+verification_command: ""
+server_port: 4801
+extends_path: ../shared.yml
+repositories:
+  - s2s

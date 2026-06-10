@@ -1,0 +1,5 @@
+{
+  "session_id": "abc123def456",
+  "stop_reason": "end_turn",
+  "transcript_path": "/Users/your_username/.claude/projects/-Users-your_username-code-epac/abc123def456.jsonl"
+}

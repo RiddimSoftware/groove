@@ -1,0 +1,818 @@
+#!/bin/bash
+# workflow-md-sync — fan-out managed WORKFLOW.md updates to enrolled repos via bot PR
+#
+# Safety model:
+#   - Opt-in only via RIDDIM_WORKFLOW_MD_SYNC=1
+#   - Exact per-repo path allowlist from the enrollment manifest
+#   - Bot identity via riddim-developer-bot GitHub App installation token (AWS Secrets)
+#   - Idempotent: finds an existing open sync PR by branch name and updates it
+#   - Refuses to touch a repo when the existing sync branch or PR contains
+#     unmanaged changes outside that repo's declared allowlist
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -P "${SCRIPT_DIR}/.." && pwd)"
+
+KEY_FILE=""
+APP_JWT=""
+APP_SLUG=""
+
+MODE=""
+SOURCE_FILE=""
+ENROLLMENT_FILE="${REPO_ROOT}/symphony/workflow-md-enrollment.yaml"
+TEMPLATE_VERSION=""
+LIMIT_REPO=""
+DRY_RUN="false"
+
+AWS_PROFILE="${AWS_PROFILE:-your-aws-profile}"
+AWS_REGION="${AWS_REGION:-us-east-1}"
+APP_ID_SECRET="${RIDDIM_WORKFLOW_MD_SYNC_APP_ID_SECRET:-agent-loop/dev-bot-app-id}"
+PRIVATE_KEY_SECRET="${RIDDIM_WORKFLOW_MD_SYNC_PRIVATE_KEY_SECRET:-agent-loop/dev-bot-private-key}"
+EXPECTED_BOT_LOGIN="${RIDDIM_WORKFLOW_MD_SYNC_BOT_LOGIN:-riddim-developer-bot[bot]}"
+SYNC_BRANCH="${RIDDIM_WORKFLOW_MD_SYNC_BRANCH:-workflow-md-sync/managed-update}"
+PR_TITLE="[WORKFLOW sync]: Managed Symphony WORKFLOW.md update"
+
+TMP_DIR="$(mktemp -d)"
+trap '[[ -n "${KEY_FILE:-}" ]] && rm -f "$KEY_FILE" || true; rm -rf "$TMP_DIR"' EXIT
+
+HTTP_STATUS=""
+HTTP_BODY=""
+FETCH_STATUS=""
+FILE_CONTENT=""
+AUTH_READY="false"
+AUTH_WARNING=""
+
+usage() {
+  cat <<'EOF'
+Usage:
+  RIDDIM_WORKFLOW_MD_SYNC=1 workflow-md-sync audit [options]
+  RIDDIM_WORKFLOW_MD_SYNC=1 workflow-md-sync sync  [options]
+
+Modes:
+  audit   Dry-run: lists every enrolled repo that would change. Exits non-zero
+          if any repo would change.
+  sync    PR mode: opens or updates one bot-authored PR per affected repo.
+          Skips repos where the managed file is already up to date.
+
+Options:
+  --source FILE         Path to the rendered WORKFLOW.md to fan out (required)
+  --enrollment FILE     Enrollment manifest path
+                        Default: <repo-root>/symphony/workflow-md-enrollment.yaml
+  --version STRING      Source template version label (included in PR body)
+                        Default: HEAD SHA of agent-config
+  --repo OWNER/REPO     Limit sync to a single enrolled repo
+  --dry-run             In sync mode, report what would change without creating PRs
+
+Environment defaults:
+  AWS_PROFILE=your-aws-profile
+  AWS_REGION=us-east-1
+  RIDDIM_WORKFLOW_MD_SYNC_APP_ID_SECRET=agent-loop/dev-bot-app-id
+  RIDDIM_WORKFLOW_MD_SYNC_PRIVATE_KEY_SECRET=agent-loop/dev-bot-private-key
+  RIDDIM_WORKFLOW_MD_SYNC_BOT_LOGIN=riddim-developer-bot[bot]
+  RIDDIM_WORKFLOW_MD_SYNC_BRANCH=workflow-md-sync/managed-update
+EOF
+}
+
+die() {
+  echo "agent-config/bin/workflow-md-sync: error: $*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+b64url() {
+  openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+b64std() {
+  openssl base64 -A
+}
+
+aws_get_secret() {
+  local parameter_name="$1"
+  local value
+  # AWS SSM Parameter Store requires hierarchical names to start with /.
+  # Callers may still pass the SM-style "agent-loop/..." form; normalize.
+  case "$parameter_name" in
+    /*) ;;
+    *) parameter_name="/$parameter_name" ;;
+  esac
+  value=$(aws ssm get-parameter \
+    --name "$parameter_name" \
+    --with-decryption \
+    --region "${AWS_REGION}" \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null) || die "failed to fetch parameter: $parameter_name (check AWS_PROFILE=${AWS_PROFILE} and parameter existence)"
+  printf '%s' "$value"
+}
+
+try_aws_get_secret() {
+  local parameter_name="$1"
+  local value
+  case "$parameter_name" in
+    /*) ;;
+    *) parameter_name="/$parameter_name" ;;
+  esac
+  value=$(aws ssm get-parameter \
+    --name "$parameter_name" \
+    --with-decryption \
+    --region "${AWS_REGION}" \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null) || return 1
+  printf '%s' "$value"
+}
+
+json_field() {
+  local path="$1"
+  python3 -c '
+import json, sys
+path = sys.argv[1].split(".") if sys.argv[1] else []
+obj = json.load(sys.stdin)
+for part in path:
+    if isinstance(obj, dict):
+        obj = obj.get(part)
+    else:
+        obj = None
+    if obj is None:
+        break
+if obj is None:
+    print("")
+elif isinstance(obj, bool):
+    print("true" if obj else "false")
+else:
+    print(obj)
+' "$path"
+}
+
+json_first_open_pr() {
+  python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+if not items:
+    print("\t\t")
+    raise SystemExit
+first = items[0]
+print("{}\t{}\t{}".format(
+    first.get("number", ""),
+    first.get("html_url", ""),
+    (first.get("user") or {}).get("login", ""),
+))
+'
+}
+
+json_compare_filenames() {
+  python3 -c '
+import json, sys
+payload = json.load(sys.stdin)
+for item in payload.get("files") or []:
+    name = item.get("filename")
+    if name:
+        print(name)
+'
+}
+
+normalize_path() {
+  python3 - "$1" <<'PY'
+import posixpath, sys
+raw = sys.argv[1]
+if not raw:
+    raise SystemExit(1)
+normalized = posixpath.normpath(raw)
+if raw.startswith('/'):
+    raise SystemExit(1)
+if normalized in ('', '.', '..'):
+    raise SystemExit(1)
+if normalized.startswith('../'):
+    raise SystemExit(1)
+if normalized == '.git' or normalized.startswith('.git/'):
+    raise SystemExit(1)
+print(normalized)
+PY
+}
+
+parse_enrollment() {
+  python3 - "$ENROLLMENT_FILE" <<'PY'
+import sys
+
+file_path = sys.argv[1]
+with open(file_path, encoding='utf-8') as fh:
+    lines = fh.readlines()
+
+in_enrolled = False
+current = None
+in_extra = False
+repos = []
+
+for raw in lines:
+    stripped = raw.strip()
+    if not stripped or stripped.startswith('#'):
+        continue
+    indent = len(raw) - len(raw.lstrip())
+
+    if stripped == 'enrolled_repos:':
+        in_enrolled = True
+        continue
+
+    if not in_enrolled:
+        continue
+
+    if indent == 2 and stripped.startswith('- repo:'):
+        if current is not None:
+            repos.append(current)
+        current = {
+            'repo': stripped[len('- repo:'):].strip(),
+            'path': 'WORKFLOW.md',
+            'extra_paths': [],
+        }
+        in_extra = False
+        continue
+
+    if current is None:
+        continue
+
+    if indent >= 4 and stripped.startswith('path:'):
+        current['path'] = stripped[len('path:'):].strip()
+        in_extra = False
+        continue
+
+    if indent >= 4 and stripped == 'extra_paths:':
+        in_extra = True
+        continue
+
+    if in_extra and indent >= 6 and stripped.startswith('- '):
+        current['extra_paths'].append(stripped[2:].strip())
+        continue
+
+    if indent <= 4:
+        in_extra = False
+
+if current is not None:
+    repos.append(current)
+
+for item in repos:
+    print(item['repo'] + '\t' + item['path'] + '\t' + '\x1f'.join(item['extra_paths']))
+PY
+}
+
+github_request() {
+  local token="$1"
+  local accept="$2"
+  local method="$3"
+  local url="$4"
+  local data="${5:-}"
+  local response body
+  local -a args
+
+  args=(-sS -X "$method" -H "Accept: ${accept}" -H "X-GitHub-Api-Version: 2022-11-28" -w $'\n__HTTP_STATUS__%{http_code}')
+  [[ -n "$token" ]] && args+=(-H "Authorization: Bearer ${token}")
+  if [[ -n "$data" ]]; then
+    args+=(-H "Content-Type: application/json" -d "$data")
+  fi
+
+  response=$(curl "${args[@]}" "$url" 2>/dev/null) || true
+  if [[ "$response" == *$'\n__HTTP_STATUS__'* ]]; then
+    HTTP_STATUS="${response##*$'\n'__HTTP_STATUS__}"
+    body="${response%$'\n'__HTTP_STATUS__*}"
+  else
+    HTTP_STATUS="000"
+    body="$response"
+  fi
+
+  HTTP_BODY="$body"
+}
+
+bootstrap_app_auth() {
+  require_cmd aws
+
+  local app_id private_key now iat exp header_json payload_json header_b64 payload_b64 signing_input sig_b64 app_json actual_bot_login
+
+  app_id="$(aws_get_secret "$APP_ID_SECRET")"
+  private_key="$(aws_get_secret "$PRIVATE_KEY_SECRET")"
+  [[ -n "$app_id" ]] || die "${APP_ID_SECRET} is empty"
+  [[ -n "$private_key" ]] || die "${PRIVATE_KEY_SECRET} is empty"
+
+  now="$(date +%s)"
+  iat=$(( now - 60 ))
+  exp=$(( now + 540 ))
+  header_json='{"alg":"RS256","typ":"JWT"}'
+  payload_json="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${app_id}\"}"
+  header_b64="$(printf '%s' "$header_json" | b64url)"
+  payload_b64="$(printf '%s' "$payload_json" | b64url)"
+  signing_input="${header_b64}.${payload_b64}"
+
+  KEY_FILE="$(mktemp)"
+  printf '%s' "$private_key" > "$KEY_FILE"
+  sig_b64="$(printf '%s' "$signing_input" | openssl dgst -sha256 -sign "$KEY_FILE" | b64url)"
+  APP_JWT="${signing_input}.${sig_b64}"
+  unset private_key
+
+  github_request "$APP_JWT" "application/vnd.github+json" GET "https://api.github.com/app"
+  [[ "$HTTP_STATUS" == "200" ]] || die "failed to fetch GitHub App metadata"
+  APP_SLUG="$(printf '%s' "$HTTP_BODY" | json_field 'slug')"
+  [[ -n "$APP_SLUG" ]] || die "could not parse GitHub App slug"
+
+  actual_bot_login="${APP_SLUG}[bot]"
+  [[ "$actual_bot_login" == "$EXPECTED_BOT_LOGIN" ]] || die "bot login mismatch: expected ${EXPECTED_BOT_LOGIN}, got ${actual_bot_login}"
+}
+
+try_bootstrap_app_auth() {
+  command -v aws >/dev/null 2>&1 || return 1
+
+  local app_id private_key now iat exp header_json payload_json header_b64 payload_b64 signing_input sig_b64 actual_bot_login
+
+  app_id="$(try_aws_get_secret "$APP_ID_SECRET")" || return 1
+  private_key="$(try_aws_get_secret "$PRIVATE_KEY_SECRET")" || return 1
+  [[ -n "$app_id" && -n "$private_key" ]] || return 1
+
+  now="$(date +%s)"
+  iat=$(( now - 60 ))
+  exp=$(( now + 540 ))
+  header_json='{"alg":"RS256","typ":"JWT"}'
+  payload_json="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${app_id}\"}"
+  header_b64="$(printf '%s' "$header_json" | b64url)"
+  payload_b64="$(printf '%s' "$payload_json" | b64url)"
+  signing_input="${header_b64}.${payload_b64}"
+
+  KEY_FILE="$(mktemp)"
+  printf '%s' "$private_key" > "$KEY_FILE"
+  sig_b64="$(printf '%s' "$signing_input" | openssl dgst -sha256 -sign "$KEY_FILE" | b64url)" || return 1
+  APP_JWT="${signing_input}.${sig_b64}"
+  unset private_key
+
+  github_request "$APP_JWT" "application/vnd.github+json" GET "https://api.github.com/app"
+  [[ "$HTTP_STATUS" == "200" ]] || return 1
+  APP_SLUG="$(printf '%s' "$HTTP_BODY" | json_field 'slug')"
+  [[ -n "$APP_SLUG" ]] || return 1
+
+  actual_bot_login="${APP_SLUG}[bot]"
+  [[ "$actual_bot_login" == "$EXPECTED_BOT_LOGIN" ]]
+}
+
+github_repo_token() {
+  local owner="$1"
+  local name="$2"
+  local install_json install_id contents_perm pr_perm token_json token
+
+  github_request "$APP_JWT" "application/vnd.github+json" GET "https://api.github.com/repos/${owner}/${name}/installation"
+  [[ "$HTTP_STATUS" == "200" ]] || die "failed to fetch installation for ${owner}/${name} (is the dev-bot app installed on this repo?)"
+
+  install_id="$(printf '%s' "$HTTP_BODY" | json_field 'id')"
+  contents_perm="$(printf '%s' "$HTTP_BODY" | json_field 'permissions.contents')"
+  pr_perm="$(printf '%s' "$HTTP_BODY" | json_field 'permissions.pull_requests')"
+  [[ -n "$install_id" ]] || die "could not parse installation id for ${owner}/${name}"
+  [[ "$contents_perm" == "write" ]] || die "developer-bot app must have contents: write on ${owner}/${name}; current permission is ${contents_perm:-missing}"
+  [[ "$pr_perm" == "write" ]] || die "developer-bot app must have pull_requests: write on ${owner}/${name}; current permission is ${pr_perm:-missing}"
+
+  github_request "$APP_JWT" "application/vnd.github+json" POST "https://api.github.com/app/installations/${install_id}/access_tokens"
+  [[ "$HTTP_STATUS" == "201" ]] || die "failed to mint installation token for ${owner}/${name}"
+  token="$(printf '%s' "$HTTP_BODY" | json_field 'token')"
+  [[ -n "$token" ]] || die "could not parse installation token for ${owner}/${name}"
+  printf '%s' "$token"
+}
+
+github_get_default_branch() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local response branch
+
+  github_request "$token" "application/vnd.github+json" GET "https://api.github.com/repos/${owner}/${name}"
+  [[ "$HTTP_STATUS" == "200" ]] || die "failed to fetch repo metadata for ${owner}/${name}"
+  branch="$(printf '%s' "$HTTP_BODY" | json_field 'default_branch')"
+  [[ -n "$branch" ]] || die "could not parse default_branch for ${owner}/${name}"
+  printf '%s' "$branch"
+}
+
+github_get_branch_sha() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local branch="$4"
+  local response sha
+
+  github_request "$token" "application/vnd.github+json" GET "https://api.github.com/repos/${owner}/${name}/git/ref/heads/${branch}"
+  [[ "$HTTP_STATUS" == "200" ]] || die "failed to get branch SHA for ${owner}/${name}@${branch}"
+  sha="$(printf '%s' "$HTTP_BODY" | json_field 'object.sha')"
+  [[ -n "$sha" ]] || die "could not parse branch SHA for ${owner}/${name}@${branch}"
+  printf '%s' "$sha"
+}
+
+github_get_file() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local path="$4"
+  local ref="${5:-}"
+  local url response body
+
+  url="https://api.github.com/repos/${owner}/${name}/contents/${path}"
+  if [[ -n "$ref" ]]; then
+    url+="?ref=${ref}"
+  fi
+
+  github_request "$token" "application/vnd.github.raw+json" GET "$url"
+  case "$HTTP_STATUS" in
+    200)
+      FETCH_STATUS="found"
+      FILE_CONTENT="$HTTP_BODY"
+      while [[ "$FILE_CONTENT" == *$'\n' ]]; do
+        FILE_CONTENT="${FILE_CONTENT%$'\n'}"
+      done
+      ;;
+    404)
+      FETCH_STATUS="missing"
+      FILE_CONTENT=""
+      ;;
+    *)
+      die "GitHub API error fetching ${owner}/${name}/${path}: HTTP ${HTTP_STATUS}"
+      ;;
+  esac
+}
+
+github_get_file_sha() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local path="$4"
+  local branch="$5"
+  local response sha
+
+  github_request "$token" "application/vnd.github+json" GET "https://api.github.com/repos/${owner}/${name}/contents/${path}?ref=${branch}"
+  case "$HTTP_STATUS" in
+    200)
+      sha="$(printf '%s' "$HTTP_BODY" | json_field 'sha')"
+      printf '%s' "$sha"
+      ;;
+    404)
+      printf ''
+      ;;
+    *)
+      die "failed to fetch file metadata for ${owner}/${name}/${path}?ref=${branch}: HTTP ${HTTP_STATUS}"
+      ;;
+  esac
+}
+
+github_branch_exists() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local branch="$4"
+  github_request "$token" "application/vnd.github+json" GET "https://api.github.com/repos/${owner}/${name}/git/ref/heads/${branch}"
+  [[ "$HTTP_STATUS" == "200" ]]
+}
+
+github_compare_filenames() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local base_ref="$4"
+  local head_ref="$5"
+  local response
+
+  github_request "$token" "application/vnd.github+json" GET "https://api.github.com/repos/${owner}/${name}/compare/${base_ref}...${head_ref}"
+  [[ "$HTTP_STATUS" == "200" ]] || die "failed to compare ${owner}/${name} ${base_ref}...${head_ref}"
+  printf '%s' "$HTTP_BODY" | json_compare_filenames
+}
+
+github_create_or_reset_branch() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local branch="$4"
+  local base_sha="$5"
+  local payload
+
+  if github_branch_exists "$token" "$owner" "$name" "$branch"; then
+    payload=$(printf '{"sha":"%s","force":true}' "$base_sha")
+    github_request "$token" "application/vnd.github+json" PATCH "https://api.github.com/repos/${owner}/${name}/git/refs/heads/${branch}" "$payload"
+    [[ "$HTTP_STATUS" == "200" ]] || die "failed to reset branch ${branch} in ${owner}/${name}"
+  else
+    payload=$(printf '{"ref":"refs/heads/%s","sha":"%s"}' "$branch" "$base_sha")
+    github_request "$token" "application/vnd.github+json" POST "https://api.github.com/repos/${owner}/${name}/git/refs" "$payload"
+    [[ "$HTTP_STATUS" == "201" ]] || die "failed to create branch ${branch} in ${owner}/${name}"
+  fi
+}
+
+github_put_file() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local path="$4"
+  local branch="$5"
+  local content_b64="$6"
+  local commit_msg="$7"
+  local existing_sha="$8"
+  local body
+
+  if [[ -n "$existing_sha" ]]; then
+    body=$(printf '{"message":"%s","content":"%s","branch":"%s","sha":"%s"}' \
+      "$commit_msg" "$content_b64" "$branch" "$existing_sha")
+  else
+    body=$(printf '{"message":"%s","content":"%s","branch":"%s"}' \
+      "$commit_msg" "$content_b64" "$branch")
+  fi
+
+  github_request "$token" "application/vnd.github+json" PUT "https://api.github.com/repos/${owner}/${name}/contents/${path}" "$body"
+  [[ "$HTTP_STATUS" == "200" || "$HTTP_STATUS" == "201" ]] || die "failed to commit ${path} to ${owner}/${name}@${branch}"
+}
+
+github_find_open_sync_pr() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local branch="$4"
+  local response
+
+  github_request "$token" "application/vnd.github+json" GET "https://api.github.com/repos/${owner}/${name}/pulls?state=open&head=${owner}:${branch}"
+  [[ "$HTTP_STATUS" == "200" ]] || die "failed to list open PRs for ${owner}/${name}"
+  printf '%s' "$HTTP_BODY" | json_first_open_pr
+}
+
+github_create_pr() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local branch="$4"
+  local default_branch="$5"
+  local body="$6"
+  local payload response pr_url
+
+  payload=$(printf '%s' "$body" | python3 - "$PR_TITLE" "$branch" "$default_branch" <<'PY'
+import json, sys
+body = sys.stdin.read()
+print(json.dumps({
+    'title': sys.argv[1],
+    'head': sys.argv[2],
+    'base': sys.argv[3],
+    'body': body,
+}))
+PY
+)
+
+  github_request "$token" "application/vnd.github+json" POST "https://api.github.com/repos/${owner}/${name}/pulls" "$payload"
+  [[ "$HTTP_STATUS" == "201" ]] || die "failed to create PR in ${owner}/${name}"
+  pr_url="$(printf '%s' "$HTTP_BODY" | json_field 'html_url')"
+  [[ -n "$pr_url" ]] || die "could not parse PR URL from GitHub response"
+  printf '%s' "$pr_url"
+}
+
+github_update_pr() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local pr_number="$4"
+  local body="$5"
+  local payload
+
+  payload=$(printf '%s' "$body" | python3 - "$PR_TITLE" <<'PY'
+import json, sys
+body = sys.stdin.read()
+print(json.dumps({'title': sys.argv[1], 'body': body}))
+PY
+)
+
+  github_request "$token" "application/vnd.github+json" PATCH "https://api.github.com/repos/${owner}/${name}/pulls/${pr_number}" "$payload"
+  [[ "$HTTP_STATUS" == "200" ]] || die "failed to update PR #${pr_number} in ${owner}/${name}"
+}
+
+is_allowlisted_path() {
+  local needle="$1"
+  shift
+  local allowed
+  for allowed in "$@"; do
+    [[ "$needle" == "$allowed" ]] && return 0
+  done
+  return 1
+}
+
+build_pr_body() {
+  local repo="$1"
+  local managed_path="$2"
+  cat <<EOF
+## Managed Symphony WORKFLOW.md sync
+
+This PR was opened automatically by \`workflow-md-sync\` to propagate the latest managed Symphony \`${managed_path}\` template.
+
+| Field | Value |
+|---|---|
+| Source template version | \`${TEMPLATE_VERSION}\` |
+| Target repo | \`${repo}\` |
+| Changed files | \`${managed_path}\` |
+| Sync branch | \`${SYNC_BRANCH}\` |
+| Sync tool | \`agent-config/bin/workflow-md-sync\` |
+
+### Validation evidence
+
+- Source file: \`${SOURCE_FILE}\`
+- Managed output was compared against the repo default branch before PR creation.
+- The canonical render is expected to pass \`swift run symphonyd --validate-only ./WORKFLOW.md\` in the autopilot repo before this fan-out runs.
+
+### Review guidance
+
+Merge this PR to apply the latest managed Symphony workflow policy to this repository. Do not edit the managed file directly in this PR; re-run the sync tool if changes are needed.
+EOF
+}
+
+append_line() {
+  local file="$1"
+  shift
+  printf '%s\n' "$*" >> "$file"
+}
+
+preflight_branch_safety() {
+  local token="$1"
+  local owner="$2"
+  local name="$3"
+  local repo="$4"
+  local default_branch="$5"
+  local -a allowlist=("${@:6}")
+  local changed_file existing_pr pr_number pr_url pr_author
+
+  if github_branch_exists "$token" "$owner" "$name" "$SYNC_BRANCH"; then
+    while IFS= read -r changed_file; do
+      [[ -z "$changed_file" ]] && continue
+      if ! is_allowlisted_path "$changed_file" "${allowlist[@]}"; then
+        die "refusing ${repo}: existing ${SYNC_BRANCH} branch changes disallowed path '${changed_file}' (allowlist: ${allowlist[*]})"
+      fi
+    done < <(github_compare_filenames "$token" "$owner" "$name" "$default_branch" "$SYNC_BRANCH")
+  fi
+
+  existing_pr="$(github_find_open_sync_pr "$token" "$owner" "$name" "$SYNC_BRANCH")"
+  IFS=$'\t' read -r pr_number pr_url pr_author <<< "$existing_pr"
+  if [[ -n "$pr_number" && "$pr_author" != "$EXPECTED_BOT_LOGIN" ]]; then
+    die "refusing ${repo}: existing open sync PR #${pr_number} is authored by ${pr_author}, expected ${EXPECTED_BOT_LOGIN}"
+  fi
+}
+
+[[ "${RIDDIM_WORKFLOW_MD_SYNC:-}" == "1" ]] || die "RIDDIM_WORKFLOW_MD_SYNC=1 is required"
+
+MODE="${1:-}"
+case "$MODE" in
+  audit|sync) shift ;;
+  -h|--help|"") usage; exit 0 ;;
+  *) die "unknown mode: $MODE" ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source)     SOURCE_FILE="${2:-}"; shift 2 ;;
+    --enrollment) ENROLLMENT_FILE="${2:-}"; shift 2 ;;
+    --version)    TEMPLATE_VERSION="${2:-}"; shift 2 ;;
+    --repo)       LIMIT_REPO="${2:-}"; shift 2 ;;
+    --dry-run)    DRY_RUN="true"; shift ;;
+    -h|--help)    usage; exit 0 ;;
+    *)            die "unknown argument: $1" ;;
+  esac
+done
+
+[[ -n "$SOURCE_FILE" ]] || die "--source FILE is required"
+[[ -f "$SOURCE_FILE" ]] || die "source file not found: $SOURCE_FILE"
+[[ -f "$ENROLLMENT_FILE" ]] || die "enrollment manifest not found: $ENROLLMENT_FILE"
+
+require_cmd curl
+require_cmd git
+require_cmd openssl
+require_cmd python3
+
+if [[ -z "$TEMPLATE_VERSION" ]]; then
+  TEMPLATE_VERSION="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+fi
+
+if [[ "$MODE" == "sync" ]]; then
+  if [[ "$DRY_RUN" == "true" ]]; then
+    if try_bootstrap_app_auth; then
+      AUTH_READY="true"
+    else
+      AUTH_WARNING="warning: dry-run branch-safety preflight skipped because bot credentials were unavailable"
+    fi
+  else
+    bootstrap_app_auth
+    AUTH_READY="true"
+  fi
+fi
+
+SOURCE_CONTENT="$(cat "$SOURCE_FILE")"
+PLAN_FILE="$TMP_DIR/plan.tsv"
+: > "$PLAN_FILE"
+
+REPOS_UP_TO_DATE=()
+REPOS_WOULD_CHANGE=()
+REPOS_UPDATED=()
+
+while IFS=$'\t' read -r repo raw_path raw_extra_paths; do
+  [[ -n "$repo" ]] || continue
+  [[ -z "$LIMIT_REPO" || "$repo" == "$LIMIT_REPO" ]] || continue
+  [[ "$repo" == */* ]] || die "invalid repo slug in enrollment manifest: ${repo}"
+
+  managed_path="$(normalize_path "$raw_path")" || die "invalid managed path '${raw_path}' for ${repo}"
+  allowlist=("$managed_path")
+
+  if [[ -n "$raw_extra_paths" ]]; then
+    while IFS= read -r extra_path; do
+      [[ -n "$extra_path" ]] || continue
+      normalized_extra="$(normalize_path "$extra_path")" || die "invalid extra_paths entry '${extra_path}' for ${repo}"
+      allowlist+=("$normalized_extra")
+    done < <(printf '%s' "$raw_extra_paths" | tr '\037' '\n')
+  fi
+
+  owner="${repo%%/*}"
+  name="${repo#*/}"
+  token=""
+
+  if [[ "$MODE" == "sync" && "$AUTH_READY" == "true" ]]; then
+    token="$(github_repo_token "$owner" "$name")"
+    default_branch="$(github_get_default_branch "$token" "$owner" "$name")"
+    preflight_branch_safety "$token" "$owner" "$name" "$repo" "$default_branch" "${allowlist[@]}"
+    github_get_file "$token" "$owner" "$name" "$managed_path"
+    current_content="$FILE_CONTENT"
+  else
+    default_branch="main"
+    github_get_file "$token" "$owner" "$name" "$managed_path"
+    current_content="$FILE_CONTENT"
+  fi
+
+  if [[ "$FETCH_STATUS" == "found" && "$current_content" == "$SOURCE_CONTENT" ]]; then
+    REPOS_UP_TO_DATE+=("$repo")
+    continue
+  fi
+
+  REPOS_WOULD_CHANGE+=("$repo")
+  append_line "$PLAN_FILE" "${repo}"$'\t'"${managed_path}"$'\t'"${default_branch}"
+done < <(parse_enrollment)
+
+if [[ "$MODE" == "audit" || "$DRY_RUN" == "true" ]]; then
+  echo "workflow-md-sync summary (mode=${MODE}${DRY_RUN:+, dry-run=${DRY_RUN}}):"
+  [[ -n "$AUTH_WARNING" ]] && echo "  ${AUTH_WARNING}"
+
+  if [[ "${#REPOS_UP_TO_DATE[@]}" -gt 0 ]]; then
+    echo "  Up to date (${#REPOS_UP_TO_DATE[@]}):"
+    for repo in "${REPOS_UP_TO_DATE[@]}"; do
+      echo "    - ${repo}"
+    done
+  fi
+
+  if [[ "${#REPOS_WOULD_CHANGE[@]}" -gt 0 ]]; then
+    echo "  Would change (${#REPOS_WOULD_CHANGE[@]}):"
+    for repo in "${REPOS_WOULD_CHANGE[@]}"; do
+      echo "    - ${repo}"
+    done
+  fi
+
+  if [[ "$MODE" == "audit" && "${#REPOS_WOULD_CHANGE[@]}" -gt 0 ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+while IFS=$'\t' read -r repo managed_path default_branch; do
+  [[ -n "$repo" ]] || continue
+  owner="${repo%%/*}"
+  name="${repo#*/}"
+
+  token="$(github_repo_token "$owner" "$name")"
+  echo "  ~ ${repo}: needs update"
+
+  base_sha="$(github_get_branch_sha "$token" "$owner" "$name" "$default_branch")"
+  github_create_or_reset_branch "$token" "$owner" "$name" "$SYNC_BRANCH" "$base_sha"
+
+  content_b64="$(printf '%s' "$SOURCE_CONTENT" | b64std)"
+  existing_file_sha="$(github_get_file_sha "$token" "$owner" "$name" "$managed_path" "$SYNC_BRANCH")"
+  commit_msg="chore: update managed ${managed_path} (Symphony template ${TEMPLATE_VERSION})"
+  github_put_file "$token" "$owner" "$name" "$managed_path" "$SYNC_BRANCH" "$content_b64" "$commit_msg" "$existing_file_sha"
+
+  pr_body="$(build_pr_body "$repo" "$managed_path")"
+  existing_pr="$(github_find_open_sync_pr "$token" "$owner" "$name" "$SYNC_BRANCH")"
+  IFS=$'\t' read -r pr_number pr_url pr_author <<< "$existing_pr"
+
+  if [[ -n "$pr_number" ]]; then
+    github_update_pr "$token" "$owner" "$name" "$pr_number" "$pr_body"
+    echo "    → updated existing PR #${pr_number} in ${repo}"
+    REPOS_UPDATED+=("${repo}#${pr_number}")
+  else
+    pr_url="$(github_create_pr "$token" "$owner" "$name" "$SYNC_BRANCH" "$default_branch" "$pr_body")"
+    echo "    → opened PR: ${pr_url}"
+    REPOS_UPDATED+=("${repo} → ${pr_url}")
+  fi
+done < "$PLAN_FILE"
+
+echo ""
+echo "workflow-md-sync summary (mode=${MODE}):"
+
+if [[ "${#REPOS_UP_TO_DATE[@]}" -gt 0 ]]; then
+  echo "  Up to date (${#REPOS_UP_TO_DATE[@]}):"
+  for repo in "${REPOS_UP_TO_DATE[@]}"; do
+    echo "    - ${repo}"
+  done
+fi
+
+if [[ "${#REPOS_UPDATED[@]}" -gt 0 ]]; then
+  echo "  Updated/PR opened (${#REPOS_UPDATED[@]}):"
+  for item in "${REPOS_UPDATED[@]}"; do
+    echo "    - ${item}"
+  done
+fi
+
+exit 0

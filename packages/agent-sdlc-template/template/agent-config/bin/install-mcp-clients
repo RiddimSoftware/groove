@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+CLAUDE_TEMPLATE="$ROOT/mcp/clients/claude/.mcp.json.template"
+CODEX_FRAGMENT="$ROOT/mcp/clients/codex/config.toml.fragment"
+GEMINI_FRAGMENT="$ROOT/mcp/clients/gemini/.gemini-cli.json.fragment"
+
+die() {
+  printf '%s: error: %s\n' "$SCRIPT_NAME" "$*" >&2
+  exit 1
+}
+
+require_file() {
+  [[ -f "$1" ]] || die "required template missing: $1"
+}
+
+install_or_merge_json() {
+  local template="$1"
+  local dest="$2"
+  local label="$3"
+
+  mkdir -p "$(dirname "$dest")"
+
+  if [[ ! -e "$dest" && ! -L "$dest" ]]; then
+    ln -s "$template" "$dest"
+    printf '%s: linked %s -> %s\n' "$SCRIPT_NAME" "$dest" "$template"
+    return
+  fi
+
+  if [[ -L "$dest" && "$(readlink "$dest")" == "$template" ]]; then
+    printf '%s: %s already linked\n' "$SCRIPT_NAME" "$dest"
+    return
+  fi
+
+  local tmp
+  tmp="$(mktemp "${dest}.tmp.XXXXXX")"
+  python3 - "$template" "$dest" "$tmp" "$label" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+template = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+tmp = Path(sys.argv[3])
+label = sys.argv[4]
+
+try:
+    base = json.loads(dest.read_text() or "{}")
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"{label}: cannot parse existing JSON {dest}: {exc}") from exc
+
+incoming = json.loads(template.read_text())
+if not isinstance(base, dict):
+    raise SystemExit(f"{label}: existing JSON root must be an object: {dest}")
+
+base_servers = base.setdefault("mcpServers", {})
+incoming_servers = incoming.get("mcpServers", {})
+if not isinstance(base_servers, dict):
+    raise SystemExit(f"{label}: existing mcpServers must be an object: {dest}")
+if not isinstance(incoming_servers, dict):
+    raise SystemExit(f"{label}: template mcpServers must be an object: {template}")
+
+base_servers.update(incoming_servers)
+tmp.write_text(json.dumps(base, indent=2, sort_keys=False) + "\n")
+PY
+  mv -f "$tmp" "$dest"
+  printf '%s: merged %s\n' "$SCRIPT_NAME" "$dest"
+}
+
+install_codex_fragment() {
+  local fragment="$1"
+  local overlay_dir="$HOME/.codex/config.toml.d"
+  local dest="$overlay_dir/riddim-mcp.toml"
+  local config="$HOME/.codex/config.toml"
+
+  mkdir -p "$overlay_dir"
+  if [[ ! -e "$dest" && ! -L "$dest" ]]; then
+    ln -s "$fragment" "$dest"
+    printf '%s: linked %s -> %s\n' "$SCRIPT_NAME" "$dest" "$fragment"
+  elif [[ -L "$dest" && "$(readlink "$dest")" == "$fragment" ]]; then
+    printf '%s: %s already linked\n' "$SCRIPT_NAME" "$dest"
+  else
+    cp -f "$fragment" "$dest"
+    printf '%s: refreshed %s\n' "$SCRIPT_NAME" "$dest"
+  fi
+
+  # Keep older Codex installs working if they do not yet read config.toml.d.
+  mkdir -p "$(dirname "$config")"
+  touch "$config"
+  python3 - "$fragment" "$config" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+fragment = Path(sys.argv[1]).read_text().strip() + "\n"
+config_path = Path(sys.argv[2])
+config = config_path.read_text()
+pattern = re.compile(r'(?ms)^\[mcp_servers\.riddim-mcp\]\n.*?(?=^\[|\Z)')
+if pattern.search(config):
+    merged = pattern.sub(fragment + "\n", config).rstrip() + "\n"
+else:
+    spacer = "\n" if config.endswith("\n") or not config else "\n\n"
+    merged = config + spacer + fragment
+config_path.write_text(merged)
+PY
+  printf '%s: ensured riddim-mcp entry in %s\n' "$SCRIPT_NAME" "$config"
+}
+
+require_file "$CLAUDE_TEMPLATE"
+require_file "$CODEX_FRAGMENT"
+require_file "$GEMINI_FRAGMENT"
+
+install_or_merge_json "$CLAUDE_TEMPLATE" "$HOME/.claude/.mcp.json" "claude"
+install_codex_fragment "$CODEX_FRAGMENT"
+install_or_merge_json "$GEMINI_FRAGMENT" "$HOME/.gemini/settings.json" "gemini"
+
+printf '%s: done\n' "$SCRIPT_NAME"

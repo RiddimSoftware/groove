@@ -1,0 +1,6 @@
+team_key: BAP
+repo_name: bubble-bop
+repository_path: /YOUR/WORKSPACE/DIR/bap
+verification_command: "For non-UI changes, run `xcodebuild -project bap.xcodeproj -scheme bap build`. For screenshot or App Store asset changes, also run the documented screenshot flow in `docs/marketing/screenshots/README.md`."
+server_port: 4777
+extends_path: ../shared.yml

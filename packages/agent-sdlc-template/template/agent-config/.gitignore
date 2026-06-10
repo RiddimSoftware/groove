@@ -1,0 +1,27 @@
+.DS_Store
+
+# Gas City
+.gc/
+.beads/*
+!.beads/config.yaml
+!.beads/metadata.json
+.gc/hooks/
+.runtime/
+
+# Runtime provenance state (written by stop-flush-provenance hook, not source)
+.agent-state/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.parquet
+.venv/
+env/
+venv/
+ENV/

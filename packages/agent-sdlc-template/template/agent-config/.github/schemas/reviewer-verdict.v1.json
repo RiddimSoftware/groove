@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/YourGithubOrg/agent-config/.github/schemas/reviewer-verdict.v1.json",
+  "title": "reviewer_verdict_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision",
+    "summary",
+    "findings",
+    "acceptance_criteria_coverage",
+    "human_gate_reason"
+  ],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "request_changes",
+        "needs_human"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "title",
+          "details",
+          "file",
+          "line"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "required",
+              "risk",
+              "nit"
+            ]
+          },
+          "actionability": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "required_autonomous_fix",
+              "external_gate",
+              "follow_up",
+              "nit",
+              null
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "details": {
+            "type": "string",
+            "minLength": 1
+          },
+          "suggested_follow_up_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "acceptance_criteria_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "criterion",
+          "status",
+          "notes"
+        ],
+        "properties": {
+          "criterion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "covered",
+              "missing",
+              "unclear"
+            ]
+          },
+          "actionability": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "required_autonomous_fix",
+              "external_gate",
+              "follow_up",
+              "nit",
+              "none",
+              null
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suggested_follow_up_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "human_gate_reason": {
+      "type": "string"
+    }
+  }
+}

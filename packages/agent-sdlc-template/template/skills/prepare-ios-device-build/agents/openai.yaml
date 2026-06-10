@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepare iOS Device Build"
+  short_description: "Prep latest main for device builds"
+  default_prompt: "Use $prepare-ios-device-build to prepare <repo-name> for running on a real iPhone from latest main."

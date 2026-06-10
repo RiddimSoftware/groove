@@ -1,0 +1,16 @@
+{
+  "session_id": "abc123def456",
+  "tool_name": "mcp__852c51d3-c3ae-4813-8f86-6e0893d9ef71__save_issue",
+  "tool_input": {
+    "title": "Test issue",
+    "teamId": "96468a5a-c0fe-4a4e-ac71-8281442b2184"
+  },
+  "tool_response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"id\":\"uuid-001\",\"identifier\":\"FAC-101\",\"url\":\"https://linear.app/riddimsoftware/issue/FAC-101/test-issue\",\"title\":\"Test issue\"}"
+      }
+    ]
+  }
+}

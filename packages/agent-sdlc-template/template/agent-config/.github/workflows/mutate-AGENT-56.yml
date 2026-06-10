@@ -1,0 +1,51 @@
+name: mutate-AGENT-56
+
+# IMPORTANT: After this mutation has been run and verified on 'main',
+# create a follow-up PR to DISABLE this workflow.
+# Do not delete the file; disabling preserves the audit trail in the Actions tab.
+#
+# Context: AGENT-56 — Delete hosted-runner RUNNER_LABELS vars on portal-door,
+# riddim-release, and sonnio so they inherit the safe self-hosted template default.
+# The vars were already deleted on 2026-05-31 via local agent session; this workflow
+# is the formal audit record and is idempotent (skips vars that no longer exist).
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for running this mutation'
+        required: true
+        default: 'AGENT-56: clear hosted-runner RUNNER_LABELS vars'
+      dry_run:
+        description: 'If true, log planned changes without applying them'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  mutate:
+    name: Execute Mutation
+    runs-on: self-hosted
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Generate developer-bot token
+        id: dev-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEV_BOT_APP_ID }}
+          private-key: ${{ secrets.DEV_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Execute mutation script
+        run: bash mutations/AGENT-56-clear-runner-labels.sh
+        env:
+          GH_TOKEN: ${{ steps.dev-token.outputs.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REASON: ${{ inputs.reason }}

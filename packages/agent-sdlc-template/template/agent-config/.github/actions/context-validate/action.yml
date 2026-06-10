@@ -1,0 +1,46 @@
+name: context-validate
+description: >-
+  Run the agent-context deterministic checks (D1-D9) from
+  scripts/context_audit against a repository's primary context file
+  (CLAUDE.md) and fail on any `fail` result. Single source of truth for the
+  context-validation CI gate; consumers fan out to it instead of copy-pasting
+  steps. See context/github-workflows.md for the opt-in note.
+
+# How this resolves its inputs:
+#   * The repo under validation is whatever is checked out at
+#     ${{ github.workspace }} (the caller checks out their own repo first).
+#   * The check library + the repositories.yaml registry come from THIS action's
+#     own directory tree, so a consumer never vendors the Python library — it
+#     always runs agent-config's pinned copy.
+
+runs:
+  using: composite
+  steps:
+    - name: Run agent-context deterministic checks (D1-D9)
+      shell: bash
+      env:
+        # ACTION_PATH is <agent-config root>/.github/actions/context-validate,
+        # so three parents up is the agent-config checkout that ships the
+        # context_audit library and the canonical registry.
+        ACTION_PATH: ${{ github.action_path }}
+        TARGET_REPO: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::error::python3 is required on the runner for the context-validate gate." >&2
+          exit 1
+        fi
+
+        ROOT="$(cd "$ACTION_PATH/../../.." && pwd)"
+
+        echo "Validating agent-context file in: $TARGET_REPO"
+        echo "Using check library + registry from: $ROOT"
+        echo
+
+        # The CLI prints each check's agent-legible remediation message and
+        # exits non-zero (1) on any D1-D9 `fail`, which fails this step.
+        PYTHONPATH="$ROOT/scripts" python3 -m context_audit \
+          "$TARGET_REPO" \
+          --registry "$ROOT/context/repositories.yaml" \
+          --format text

@@ -1,0 +1,31 @@
+name: Sync Human Handoff Linear Template
+
+# Runs whenever the canonical HH template file changes on main.
+# Converts the markdown to Linear's TipTap rich-text format and calls
+# templateUpdate via the GraphQL API. The GHA run log is the audit trail.
+#
+# Template ID: 135dbbd2-68cc-46bc-873b-8b74788ea130 (Human Handoff workspace template)
+# Canonical source: context/templates/human-handoff-issue-body.md
+# Sync script: scripts/sync_hh_template.py
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - context/templates/human-handoff-issue-body.md
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync to Linear
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync template to Linear
+        run: python3 scripts/sync_hh_template.py
+        env:
+          AWS_PROFILE: your-aws-profile

@@ -1,0 +1,6 @@
+team_key: D12
+repo_name: doubledozen
+repository_path: /YOUR/WORKSPACE/DIR/doubledozen
+verification_command: "From `/YOUR/WORKSPACE/DIR/autopilot`, run `swift run symphonyd workflow audit /YOUR/WORKSPACE/DIR/agent-config/symphony/manifests/doubledozen.yml`. Status should report `current`. Run `swift run symphonyd workflow render /YOUR/WORKSPACE/DIR/agent-config/symphony/manifests/doubledozen.yml /YOUR/WORKSPACE/DIR/doubledozen/WORKFLOW.md` to verify the regenerated `/YOUR/WORKSPACE/DIR/doubledozen/WORKFLOW.md` matches expectations."
+server_port: 4779
+extends_path: ../shared.yml

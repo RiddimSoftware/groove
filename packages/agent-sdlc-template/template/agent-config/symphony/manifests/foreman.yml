@@ -1,0 +1,6 @@
+team_key: MAN
+repo_name: foreman
+repository_path: /YOUR/WORKSPACE/DIR/foreman
+verification_command: ""
+server_port: 4797
+extends_path: ../shared.yml

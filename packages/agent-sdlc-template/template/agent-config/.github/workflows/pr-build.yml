@@ -1,0 +1,47 @@
+name: pr-build
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run actionlint
+        run: actionlint -color .github/workflows/*.yml
+
+  context-validate:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate agent-context file (D1-D9)
+        uses: ./.github/actions/context-validate
+
+  template-contract:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Agent-prompt template contract checks
+        run: bash tests/test-agent-prompt-template-contract.sh
+
+  pr-build:
+    name: pr-build
+    needs: [build, context-validate, template-contract]
+    runs-on: self-hosted
+    if: always()
+    steps:
+      - name: Check gates passed
+        run: |
+          if [ '${{ needs.build.result }}' != 'success' ] || [ '${{ needs.context-validate.result }}' != 'success' ] || [ '${{ needs.template-contract.result }}' != 'success' ]; then
+            exit 1
+          fi

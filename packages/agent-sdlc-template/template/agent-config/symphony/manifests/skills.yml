@@ -1,0 +1,8 @@
+team_key: SKILLS
+repo_name: skills
+repository_path: /YOUR/WORKSPACE/DIR/skills
+verification_command: ""
+server_port: 4794
+extends_path: ../shared.yml
+repositories:
+  - skills

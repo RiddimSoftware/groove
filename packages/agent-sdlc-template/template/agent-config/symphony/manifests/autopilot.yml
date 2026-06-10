@@ -1,0 +1,8 @@
+team_key: AUTO
+repo_name: autopilot
+repository_path: /YOUR/WORKSPACE/DIR/autopilot
+verification_command: "For WORKFLOW.md changes, run `swift run symphonyd --validate-only ./WORKFLOW.md` from `/YOUR/WORKSPACE/DIR/autopilot`."
+server_port: 4779
+extends_path: ../shared.yml
+repositories:
+  - autopilot

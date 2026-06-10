@@ -1,0 +1,8 @@
+team_key: FAC
+repo_name: software-factory
+repository_path: /YOUR/WORKSPACE/DIR/software-factory
+verification_command: "Validate with `swift run symphonyd --validate-only /YOUR/WORKSPACE/DIR/software-factory/WORKFLOW.md` from `/YOUR/WORKSPACE/DIR/autopilot`."
+server_port: 4785
+extends_path: ../shared.yml
+repositories:
+  - software-factory

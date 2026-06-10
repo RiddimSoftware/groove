@@ -1,0 +1,8 @@
+team_key: WEB
+repo_name: riddim-website
+repository_path: /YOUR/WORKSPACE/DIR/riddim-website
+verification_command: "Install dependencies with `npm install --package-lock=false` when missing. Run `npm run validate`. For visual changes, inspect `_site` output and capture screenshots."
+server_port: 4778
+extends_path: ../shared.yml
+repositories:
+  - riddim-website

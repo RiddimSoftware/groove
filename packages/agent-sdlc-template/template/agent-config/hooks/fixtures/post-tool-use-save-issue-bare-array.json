@@ -1,0 +1,13 @@
+{
+  "session_id": "barearrayfix",
+  "tool_name": "mcp__claude_ai_Linear__save_issue",
+  "tool_input": {
+    "title": "AGENT-19 canary smoke"
+  },
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\"id\":\"LAB-57\",\"title\":\"AGENT-19 canary smoke\",\"url\":\"https://linear.app/riddimsoftware/issue/LAB-57/agent-19-canary-smoke\"}"
+    }
+  ]
+}

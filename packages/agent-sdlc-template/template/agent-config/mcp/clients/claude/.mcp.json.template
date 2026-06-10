@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "riddim-mcp": {
+      "command": "mcpd",
+      "args": ["stdio"],
+      "env": {
+        "RIDDIM_MCP_LOG_DIR": "${HOME}/Library/Logs/riddim-mcp",
+        "RIDDIM_MCP_STATE_DIR": "${HOME}/.riddim-mcp"
+      }
+    }
+  }
+}
