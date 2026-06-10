@@ -1,8 +1,0 @@
-team_key: MCP
-repo_name: mcp
-repository_path: /YOUR/WORKSPACE/DIR/mcp
-verification_command: ""
-server_port: 4778
-extends_path: ../shared.yml
-repositories:
-  - mcp

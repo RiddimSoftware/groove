@@ -1,8 +1,0 @@
-team_key: SON
-repo_name: sonnio
-repository_path: /YOUR/WORKSPACE/DIR/sonnio
-verification_command: "Run the relevant build and test commands for this repo. For iOS app changes, start with the documented Sonnio evidence/build flow."
-server_port: 4782
-extends_path: ../shared.yml
-repositories:
-  - sonnio

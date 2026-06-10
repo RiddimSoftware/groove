@@ -1,6 +1,0 @@
-team_key: S2S
-repo_name: bettrack
-repository_path: /YOUR/WORKSPACE/DIR/bettrack
-verification_command: "Run the relevant build and test commands for this repo."
-server_port: 4777
-extends_path: ../agent-config/symphony/shared.yml

@@ -1,8 +1,0 @@
-team_key: REL
-repo_name: riddim-release
-repository_path: /YOUR/WORKSPACE/DIR/riddim-release
-verification_command: ""
-server_port: 4786
-extends_path: ../shared.yml
-repositories:
-  - riddim-release

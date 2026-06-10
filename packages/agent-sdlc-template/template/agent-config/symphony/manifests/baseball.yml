@@ -1,8 +1,0 @@
-team_key: BASE
-repo_name: baseball
-repository_path: /YOUR/WORKSPACE/DIR/baseball
-verification_command: "For WORKFLOW.md changes, run `swift run symphonyd --validate-only /YOUR/WORKSPACE/DIR/baseball/WORKFLOW.md` from `/YOUR/WORKSPACE/DIR/autopilot`. Repo-local build/test commands will land once the BASE-1 runtime ADR and the Arch Team Foundation Project ship the chosen toolchain (Python expected). Until then, treat the simulator engine as scaffold-only."
-server_port: 4780
-extends_path: ../shared.yml
-repositories:
-  - baseball

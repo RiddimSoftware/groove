@@ -1,9 +1,0 @@
-team_key: ASO
-repo_name: aso
-repository_path: /YOUR/WORKSPACE/DIR/aso
-verification_command: "Run the relevant build and test commands for this repo."
-server_port: 4777
-extends_path: ../shared.yml
-repositories:
-  - aso
-local_prompt_sections: []

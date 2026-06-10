@@ -1,8 +1,0 @@
-team_key: AGENT
-repo_name: agent-config
-repository_path: /YOUR/WORKSPACE/DIR/agent-config
-verification_command: "Validate with `swift run symphonyd --validate-only /YOUR/WORKSPACE/DIR/agent-config/WORKFLOW.md` from `/YOUR/WORKSPACE/DIR/autopilot`."
-server_port: 4784
-extends_path: ../shared.yml
-repositories:
-  - agent-config

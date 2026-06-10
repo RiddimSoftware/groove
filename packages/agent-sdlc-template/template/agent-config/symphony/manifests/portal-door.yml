@@ -1,6 +1,0 @@
-team_key: DOOR
-repo_name: portal-door
-repository_path: /YOUR/WORKSPACE/DIR/nether
-verification_command: "Run the relevant build and test commands for this repo. For iOS app changes, start with `cd ios && xcodebuild -project Nether.xcodeproj -scheme Nether build`."
-server_port: 4783
-extends_path: ../shared.yml

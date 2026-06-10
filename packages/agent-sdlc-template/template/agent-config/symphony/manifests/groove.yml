@@ -1,6 +1,0 @@
-team_key: GRV
-repo_name: groove
-repository_path: /YOUR/WORKSPACE/DIR/groove
-verification_command: ""
-server_port: 4799
-extends_path: ../shared.yml
